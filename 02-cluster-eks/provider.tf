@@ -6,6 +6,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.95.0" 
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.23.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.10.0"
+    }
   }
 
   # Cấu hình Backend trỏ về S3 và DynamoDB để lưu trữ trạng thái và khóa
@@ -28,5 +36,26 @@ provider "aws" {
       Environment = "Dev"
       ManagedBy   = "Terraform"
     }
+  }
+}
+
+# Lấy token xác thực tạm thời từ AWS EKS sau khi cluster được tạo xong
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_name
+}
+
+# Cấu hình Provider cho Kubernetes
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  token                  = data.aws_eks_cluster_auth.cluster.token
+}
+
+# Cấu hình Provider cho Helm
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    token                  = data.aws_eks_cluster_auth.cluster.token
   }
 }
