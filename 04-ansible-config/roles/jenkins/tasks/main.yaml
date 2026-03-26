@@ -1,0 +1,50 @@
+---
+# Giai đoạn 1: Clean up old state safely (Ansible Native)
+- name: Remove old Jenkins repository list
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/jenkins.list
+    state: absent
+
+- name: Remove old Jenkins GPG keys
+  ansible.builtin.file:
+    path: /usr/share/keyrings/jenkins.asc
+    state: absent
+
+# Giai đoạn 2 & 3: Provision Key & Repo
+- name: Download Jenkins GPG key 2026
+  ansible.builtin.get_url:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+    dest: /usr/share/keyrings/jenkins.asc
+    mode: '0644'
+
+- name: Add Jenkins repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/jenkins.asc] https://pkg.jenkins.io/debian-stable binary/"
+    filename: jenkins
+    state: present
+
+# Giai đoạn 4: Install & Start
+- name: Install Jenkins
+  ansible.builtin.apt:
+    name: jenkins
+    state: present
+    update_cache: yes
+
+- name: Ensure Jenkins service is running and enabled
+  ansible.builtin.systemd:
+    name: jenkins
+    state: started
+    enabled: yes
+
+- name: Wait for Jenkins initial admin password file to be created
+  ansible.builtin.wait_for:
+    path: /var/lib/jenkins/secrets/initialAdminPassword
+    state: present
+    timeout: 120
+    sleep: 5
+
+- name: Fetch Jenkins initial admin password to local workspace
+  ansible.builtin.fetch:
+    src: /var/lib/jenkins/secrets/initialAdminPassword
+    dest: "./jenkins_initial_admin_password.txt"
+    flat: yes

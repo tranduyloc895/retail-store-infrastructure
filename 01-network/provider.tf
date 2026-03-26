@@ -8,7 +8,7 @@ terraform {
     }
   }
 
-  # Cấu hình Backend trỏ về S3 và DynamoDB để lưu trữ trạng thái và khóa
+  # Configure remote backend to store Terraform state in S3
   backend "s3" {
     bucket         = "devsecops-tfstate-23520868-23521463" 
     key            = "01-network/terraform.tfstate"
@@ -21,7 +21,7 @@ terraform {
 provider "aws" {
   region = "ap-southeast-1"
 
-  # Tự động dán nhãn (Tag) cho mọi tài nguyên được tạo ra
+  # Auto-tagging for all AWS resources created by this provider
   default_tags {
     tags = {
       Project     = "DevSecOps-Ecommerce"

@@ -1,4 +1,5 @@
 // Ignore the .terraform directory and Terraform state files
 .terraform/
 .terraform.lock.hcl
+jenkins_initial_admin_password.txt
 

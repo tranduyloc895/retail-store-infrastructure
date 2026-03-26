@@ -9,7 +9,7 @@ module "vpc" {
   private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
   public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
 
-  # Cấu hình Routing & NAT Gateway
+  # Enable NAT Gateway for private subnets to access the internet
   enable_nat_gateway   = true
   single_nat_gateway   = true  
   enable_dns_hostnames = true

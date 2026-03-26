@@ -1,0 +1,15 @@
+---
+- name: Install Docker Engine
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+
+- name: Add 'ubuntu' and 'jenkins' users to docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: yes
+  loop:
+    - ubuntu
+    - jenkins
+  ignore_errors: yes

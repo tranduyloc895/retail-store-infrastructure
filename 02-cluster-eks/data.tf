@@ -6,7 +6,7 @@ data "aws_vpc" "ecommerce" {
   }
 }
 
-# Tìm các Private Subnets bên trong VPC
+# Find Private Subnets in the VPC with the tag "kubernetes.io/role/internal-elb" = "1"
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
