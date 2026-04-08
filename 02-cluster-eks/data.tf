@@ -1,8 +1,7 @@
-# File: 02-cluster-eks/data.tf
-
+# Find VPC by name tag
 data "aws_vpc" "ecommerce" {
   tags = {
-    Name = "ecommerce-vpc"
+    Name = var.vpc_name
   }
 }
 

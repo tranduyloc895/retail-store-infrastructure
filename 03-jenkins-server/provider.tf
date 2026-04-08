@@ -20,12 +20,17 @@ terraform {
     key          = "03-jenkins-server/terraform.tfstate"
     region       = "ap-southeast-1"
     use_lockfile = true
+    encrypt      = true
   }
 }
 
 provider "aws" {
-  region = "ap-southeast-1"
+  region = var.aws_region
   default_tags {
-    tags = { Project = "DevSecOps-Ecommerce", Environment = "Dev", ManagedBy = "Terraform" }
+    tags = {
+      Project     = var.project
+      Environment = var.environment
+      ManagedBy   = "Terraform"
+    }
   }
 }

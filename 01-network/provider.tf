@@ -4,13 +4,13 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.40.0" 
+      version = "~> 5.40.0"
     }
   }
 
   # Configure remote backend to store Terraform state in S3
   backend "s3" {
-    bucket         = "devsecops-tfstate-23520868-23521463" 
+    bucket         = "devsecops-tfstate-23520868-23521463"
     key            = "01-network/terraform.tfstate"
     region         = "ap-southeast-1"
     use_lockfile   = true
@@ -19,13 +19,12 @@ terraform {
 }
 
 provider "aws" {
-  region = "ap-southeast-1"
+  region = var.aws_region
 
-  # Auto-tagging for all AWS resources created by this provider
   default_tags {
     tags = {
-      Project     = "DevSecOps-Ecommerce"
-      Environment = "Dev"
+      Project     = var.project
+      Environment = var.environment
       ManagedBy   = "Terraform"
     }
   }

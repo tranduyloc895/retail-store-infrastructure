@@ -1,4 +1,4 @@
-# 1. IAM Role & Security Group cho Jenkins Server
+# IAM Role & Security Group cho Jenkins Server
 resource "aws_iam_role" "jenkins_ssm_role" {
   name = "jenkins-ssm-role"
   assume_role_policy = jsonencode({
@@ -11,7 +11,7 @@ resource "aws_iam_role" "jenkins_ssm_role" {
   })
 }
 
-# Attach policy to allow EC2 to communicate with SSM 
+# Attach policy to allow EC2 to communicate with SSM
 resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.jenkins_ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -23,7 +23,7 @@ resource "aws_iam_instance_profile" "jenkins" {
   role = aws_iam_role.jenkins_ssm_role.name
 }
 
-# 2. Security Group: Firewall Zero-Trust
+# Security Group: Firewall Zero-Trust
 resource "aws_security_group" "jenkins_sg" {
   name        = "jenkins-sg"
   description = "Security group for Jenkins Server"

@@ -1,6 +1,6 @@
 # Find VPC
 data "aws_vpc" "ecommerce" {
-  tags = { Name = "ecommerce-vpc" }
+  tags = { Name = var.vpc_name }
 }
 
 # Find Private Subnets
