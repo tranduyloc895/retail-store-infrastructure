@@ -35,3 +35,9 @@ resource "local_file" "private_key" {
   filename        = "${path.module}/jenkins-ansible-key.pem"
   file_permission = "0400"
 }
+
+# Save public key to local file (used by Ansible to configure agent authorized_keys)
+resource "local_file" "public_key" {
+  content  = tls_private_key.jenkins_key.public_key_openssh
+  filename = "${path.module}/jenkins-ansible-key.pub"
+}

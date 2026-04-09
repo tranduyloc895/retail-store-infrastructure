@@ -2,9 +2,21 @@
 - name: Configure Jenkins Master Server
   hosts: jenkins_master
   become: yes
-  
+
   roles:
     - common
     - java
     - docker
     - jenkins
+
+- name: Configure Jenkins Agent Server
+  hosts: jenkins_agent
+  become: yes
+
+  roles:
+    - common
+    - java
+    - docker
+    - awscli
+    - kubectl
+    - jenkins-agent

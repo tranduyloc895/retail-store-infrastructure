@@ -3,4 +3,4 @@
 .terraform.lock.hcl
 jenkins_initial_admin_password.txt
 .claude
-*.pem, *.key, *.secret
+*.pem, *.key, *.secret, *pub

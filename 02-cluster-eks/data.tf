@@ -16,3 +16,13 @@ data "aws_subnets" "private" {
     "kubernetes.io/role/internal-elb" = "1"
   }
 }
+
+# Lookup Jenkins Agent IAM role (created by 03-jenkins-server)
+data "aws_iam_role" "jenkins_agent" {
+  name = "jenkins-agent-role"
+}
+
+# Lookup Jenkins Agent Security Group (created by 03-jenkins-server)
+data "aws_security_group" "jenkins_agent" {
+  name = "jenkins-agent-sg"
+}

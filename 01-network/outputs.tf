@@ -20,5 +20,5 @@ output "public_subnet_ids" {
 
 output "nat_gateway_public_ip" {
   description = "Public IP of the NAT Gateway"
-  value       = module.vpc.natgw_ips
+  value       = module.vpc.nat_public_ips
 }

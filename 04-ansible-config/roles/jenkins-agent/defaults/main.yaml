@@ -1,0 +1,2 @@
+---
+jenkins_master_public_key_path: "../../03-jenkins-server/jenkins-ansible-key.pub"

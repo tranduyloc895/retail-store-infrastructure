@@ -45,3 +45,19 @@ variable "environment" {
   type        = string
   default     = "Dev"
 }
+
+# ============================================================
+# Jenkins Agent Variables
+# ============================================================
+
+variable "agent_instance_type" {
+  description = "EC2 instance type for Jenkins Agent (needs more resources for Docker builds)"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "agent_root_volume_size" {
+  description = "Root EBS volume size in GB for Jenkins Agent (larger for Docker images)"
+  type        = number
+  default     = 50
+}

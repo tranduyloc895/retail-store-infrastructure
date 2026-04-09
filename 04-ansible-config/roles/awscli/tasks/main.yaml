@@ -1,0 +1,39 @@
+---
+- name: Check if AWS CLI v2 is already installed
+  ansible.builtin.command: aws --version
+  register: awscli_check
+  changed_when: false
+  failed_when: false
+
+- name: Download AWS CLI v2 installer
+  ansible.builtin.get_url:
+    url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+    dest: /tmp/awscliv2.zip
+    mode: "0644"
+  when: awscli_check.rc != 0
+
+- name: Install unzip package
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+  when: awscli_check.rc != 0
+
+- name: Unzip AWS CLI v2 installer
+  ansible.builtin.unarchive:
+    src: /tmp/awscliv2.zip
+    dest: /tmp
+    remote_src: yes
+  when: awscli_check.rc != 0
+
+- name: Install AWS CLI v2
+  ansible.builtin.command: /tmp/aws/install
+  when: awscli_check.rc != 0
+
+- name: Clean up installer files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/awscliv2.zip
+    - /tmp/aws
+  when: awscli_check.rc != 0

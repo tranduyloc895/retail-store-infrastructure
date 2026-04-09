@@ -23,3 +23,27 @@ output "ssh_private_key" {
   value       = tls_private_key.jenkins_key.private_key_pem
   sensitive   = true
 }
+
+# ============================================================
+# Jenkins Agent Outputs
+# ============================================================
+
+output "agent_private_ip" {
+  description = "Private IP of Jenkins Agent"
+  value       = aws_instance.jenkins_agent.private_ip
+}
+
+output "agent_instance_id" {
+  description = "EC2 Instance ID of Jenkins Agent (used for SSM and Ansible inventory)"
+  value       = aws_instance.jenkins_agent.id
+}
+
+output "agent_security_group_id" {
+  description = "Security group ID attached to Jenkins Agent"
+  value       = aws_security_group.jenkins_agent_sg.id
+}
+
+output "agent_iam_role_arn" {
+  description = "ARN of the IAM role attached to Jenkins Agent"
+  value       = aws_iam_role.jenkins_agent_role.arn
+}

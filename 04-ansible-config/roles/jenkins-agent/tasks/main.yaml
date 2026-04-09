@@ -1,0 +1,36 @@
+---
+# Tạo user jenkins và cấu hình SSH cho Master kết nối vào Agent
+- name: Create jenkins user
+  ansible.builtin.user:
+    name: jenkins
+    shell: /bin/bash
+    create_home: yes
+    home: /var/lib/jenkins
+
+- name: Add jenkins user to docker group
+  ansible.builtin.user:
+    name: jenkins
+    groups: docker
+    append: yes
+
+- name: Create .ssh directory for jenkins user
+  ansible.builtin.file:
+    path: /var/lib/jenkins/.ssh
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0700"
+
+- name: Add authorized key for Jenkins Master to connect
+  ansible.builtin.authorized_key:
+    user: jenkins
+    key: "{{ lookup('file', playbook_dir + '/../03-jenkins-server/jenkins-ansible-key.pub') }}"
+    state: present
+
+- name: Create Jenkins agent working directory
+  ansible.builtin.file:
+    path: /var/lib/jenkins/agent
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0755"
