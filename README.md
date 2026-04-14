@@ -1,10 +1,11 @@
 # DevSecOps E-commerce Infrastructure
 
-Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terraform** de provisioning ha tang AWS, **Ansible** de configuration management, va **Jenkins** lam CI/CD pipeline.
+Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terraform** de provisioning ha tang AWS, **Ansible** de configuration management, **Jenkins** lam CI pipeline (build + push image), va **ArgoCD** lam CD pipeline (GitOps, pull-based deploy).
 
 ## Muc luc
 
 - [Kien truc tong quan](#kien-truc-tong-quan)
+- [Luong CI/CD theo mo hinh GitOps](#luong-cicd-theo-mo-hinh-gitops)
 - [Yeu cau he thong](#yeu-cau-he-thong)
 - [Cau truc thu muc](#cau-truc-thu-muc)
 - [Chi tiet tung module](#chi-tiet-tung-module)
@@ -16,7 +17,9 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
 - [Thu tu trien khai](#thu-tu-trien-khai)
 - [Huong dan trien khai chi tiet](#huong-dan-trien-khai-chi-tiet)
 - [Cau hinh Jenkins UI](#cau-hinh-jenkins-ui)
+- [Cai ArgoCD Application](#cai-argocd-application)
 - [Chay Pipeline CI/CD](#chay-pipeline-cicd)
+- [Thu hep quyen Jenkins Agent (post-GitOps)](#thu-hep-quyen-jenkins-agent-post-gitops)
 - [Quan ly Terraform State](#quan-ly-terraform-state)
 - [Bao mat](#bao-mat)
 - [So do mang](#so-do-mang)
@@ -59,7 +62,7 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
                         │  │                                                    │  │
                         │  │  ┌──────────────────────────────────────────────┐  │  │
                         │  │  │  EKS Cluster: ecommerce-cluster              │  │  │
-                        │  │  │  Kubernetes 1.29 + ArgoCD                    │  │  │
+                        │  │  │  Kubernetes 1.31 + ArgoCD (GitOps)           │  │  │
                         │  │  └──────────────────────────────────────────────┘  │  │
                         │  │                                                    │  │
                         │  │  ┌──────────────────────────────────────────────┐  │  │
@@ -69,23 +72,52 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
                         └──────────────────────────────────────────────────────────┘
 ```
 
-**Luong CI/CD:**
+---
+
+## Luong CI/CD theo mo hinh GitOps
+
+Du an ap dung **GitOps pull-based** thay vi push-based truyen thong:
+- **Jenkins** chi chiu trach nhiem CI: build image + push ECR + cap nhat manifest.
+- **ArgoCD** (chay trong cluster) chiu trach nhiem CD: poll Git repo va tu apply thay doi vao cluster.
 
 ```
-Developer push code
-       │
-       ▼
+Developer push code (retail-store-microservices)
+        │
+        ▼
 Jenkins Master ──trigger──► Jenkins Agent
                                │
-                    ┌──────────┼──────────┐
-                    ▼          ▼          ▼
-              Docker Build   Push ECR   Deploy EKS
-                                         (kubectl apply)
+                    ┌──────────┼───────────┐
+                    ▼          ▼           ▼
+              Build Docker  Push ECR   Update GitOps Repo
+                  Image                (git commit image tag)
                                             │
                                             ▼
-                                     EKS Cluster
-                                   (retail-store namespace)
+                                      retail-store-gitops (Git)
+                                            │
+                            poll / webhook  │
+                                            ▼
+                                       ArgoCD (in-cluster)
+                                            │
+                                            ▼ kubectl apply
+                                       EKS Cluster
+                                     (retail-store ns)
+                                            │
+                                            ▼
+                                     Rolling update pods
 ```
+
+**Diem quan trong:**
+- Jenkins Agent **khong can quyen kubectl vao cluster** (xem muc [Thu hep quyen Jenkins Agent](#thu-hep-quyen-jenkins-agent-post-gitops))
+- Image tag = 7 ky tu dau cua Git commit SHA -> truy vet 1-1 giua code / image / deployment
+- Rollback chi can `git revert` trong repo gitops, khong phai rebuild image
+
+**3 repo trong he sinh thai:**
+
+| Repo | Vai tro |
+|------|---------|
+| `infrastructure` (this repo) | Terraform + Ansible: VPC, EKS, Jenkins, ECR, ArgoCD |
+| `retail-store-microservices` | Source code 5 services + Jenkinsfile |
+| `retail-store-gitops` | K8s manifests + ArgoCD Application (source of truth cho cluster) |
 
 ---
 
@@ -97,10 +129,12 @@ Jenkins Master ──trigger──► Jenkins Agent
 | [AWS CLI](https://aws.amazon.com/cli/) | v2 | Tuong tac voi AWS API |
 | [Ansible](https://www.ansible.com/) | >= 2.14 | Configuration management |
 | [AWS Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | Latest | SSH tunnel qua SSM |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | >= 1.29 | Quan ly Kubernetes cluster |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | >= 1.31 | Quan ly Kubernetes cluster |
 | [Helm](https://helm.sh/) | >= 3.0 | Package manager cho Kubernetes |
 
 **AWS Credentials:** Dam bao da cau hinh AWS credentials (`aws configure`) voi quyen du de tao VPC, EKS, EC2, ECR, IAM, S3.
+
+**GitHub account:** Can quyen tao Fine-grained Personal Access Token cho repo `retail-store-gitops`.
 
 ---
 
@@ -117,7 +151,7 @@ infrastructure/
 │   ├── variables.tf                      #   Input variables
 │   └── outputs.tf                        #   VPC ID, subnet IDs, NAT IP
 │
-├── 02-cluster-eks/                       # Layer 2: Kubernetes
+├── 02-cluster-eks/                       # Layer 2: Kubernetes + GitOps controller
 │   ├── provider.tf                       #   AWS + Kubernetes + Helm providers
 │   ├── data.tf                           #   Lookup VPC, subnets, Jenkins Agent role/SG
 │   ├── eks.tf                            #   EKS cluster + node groups + access entries
@@ -125,7 +159,7 @@ infrastructure/
 │   ├── variables.tf                      #   Input variables
 │   └── outputs.tf                        #   Cluster name, endpoint, SG IDs
 │
-├── 03-jenkins-server/                    # Layer 3: CI/CD Server
+├── 03-jenkins-server/                    # Layer 3: CI Server
 │   ├── provider.tf                       #   AWS + TLS + Local providers
 │   ├── data.tf                           #   Lookup VPC, subnets, AMI
 │   ├── ec2.tf                            #   Jenkins Master EC2 + SSH key generation
@@ -150,7 +184,7 @@ infrastructure/
 │       ├── awscli/tasks/main.yaml        #   AWS CLI v2
 │       ├── kubectl/                      #   kubectl binary
 │       │   ├── tasks/main.yaml
-│       │   └── defaults/main.yaml        #     Version: 1.29.0
+│       │   └── defaults/main.yaml        #     Version: 1.31.0
 │       └── jenkins-agent/                #   Agent user + SSH authorized_keys
 │           ├── tasks/main.yaml
 │           └── defaults/main.yaml
@@ -191,7 +225,7 @@ infrastructure/
 
 ### 02-cluster-eks: Kubernetes Cluster & ArgoCD
 
-**Muc dich:** Trien khai EKS cluster lam runtime, cai ArgoCD cho GitOps.
+**Muc dich:** Trien khai EKS cluster lam runtime, cai ArgoCD lam GitOps controller.
 
 **Module su dung:** [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) v20+
 
@@ -200,11 +234,13 @@ infrastructure/
 | Config | Gia tri |
 |--------|---------|
 | Cluster Name | `ecommerce-cluster` |
-| Kubernetes Version | `1.29` |
+| Kubernetes Version | `1.31` |
 | Endpoint | Public + Private access |
 | Logging | API, Audit, Authenticator |
 | Encryption | KMS cho Kubernetes secrets |
 | Admin | Cluster creator co admin permissions |
+
+> **Luu y ve version:** EKS chi cho phep upgrade 1 minor version moi lan (1.29 -> 1.30 -> 1.31). Chon version con **standard support toi thieu 12 thang** khi tao cluster moi. Kiem tra tai [EKS Kubernetes release calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
 
 #### Node Group: `main_nodes`
 
@@ -215,20 +251,27 @@ infrastructure/
 | Scaling | Min 2, Max 3, Desired 2 |
 | Disk Size | 50 GB |
 
-#### ArgoCD
+#### ArgoCD (GitOps Controller)
 
 | Config | Gia tri |
 |--------|---------|
 | Helm Chart | `argo-cd` v5.51.4 |
 | Namespace | `argocd` (tu tao) |
+| Vai tro | Pull manifests tu `retail-store-gitops` repo va apply vao cluster |
+| Sync policy | Auto (prune + selfHeal) — cau hinh trong file `argocd/*.yml` cua gitops repo |
+| Poll interval | 3 phut (mac dinh), co the rut ngan qua webhook |
+
+ArgoCD duoc cai ngay trong layer nay vi no la thanh phan bat buoc cua cluster — neu khong co ArgoCD, khong co gi apply manifest tu Git vao cluster.
 
 #### EKS Access Entries
 
 Jenkins Agent IAM role duoc cap quyen `AmazonEKSClusterAdminPolicy` de deploy workloads len cluster.
 
+> **Roadmap:** Sau khi GitOps on dinh, quyen nay se bi **thu hep** (xem muc [Thu hep quyen Jenkins Agent](#thu-hep-quyen-jenkins-agent-post-gitops)) — vi Jenkins khong con phai goi kubectl nua.
+
 #### Security Group Rule
 
-Cho phep Jenkins Agent truy cap EKS API endpoint (port 443) thong qua security group rule rieng.
+Cho phep Jenkins Agent truy cap EKS API endpoint (port 443). Quyen nay cung se duoc xem xet loai bo sau khi hoan tat chuyen doi GitOps.
 
 **Data Sources:** Module nay lookup VPC, subnets, Jenkins Agent IAM role va security group tu cac module khac thong qua tags va ten — khong hardcode ID.
 
@@ -236,7 +279,7 @@ Cho phep Jenkins Agent truy cap EKS API endpoint (port 443) thong qua security g
 
 ### 03-jenkins-server: Jenkins Master & Agent
 
-**Muc dich:** Provision 2 EC2 instance trong private subnet — 1 Master (dieu phoi pipeline) va 1 Agent (thuc thi build, push, deploy).
+**Muc dich:** Provision 2 EC2 instance trong private subnet — 1 Master (dieu phoi pipeline) va 1 Agent (thuc thi build + push + update GitOps repo).
 
 #### Jenkins Master
 
@@ -270,20 +313,20 @@ Cho phep Jenkins Agent truy cap EKS API endpoint (port 443) thong qua security g
 | Root Volume | 50 GB gp3 |
 | Name Tag | `Jenkins-Agent` |
 
-**IAM Role:** `jenkins-agent-role` — quyen rong hon Master:
+**IAM Role:** `jenkins-agent-role` — hien tai co quyen:
 
-| Policy | Muc dich |
-|--------|----------|
-| `AmazonSSMManagedInstanceCore` | Ansible provision qua SSM |
-| ECR policy (inline) | `GetAuthorizationToken`, `PutImage`, `InitiateLayerUpload`, ... — chi cho repos `retail-store/*` |
-| EKS policy (inline) | `DescribeCluster`, `ListClusters`, `sts:GetCallerIdentity` |
+| Policy | Muc dich | Se giu lai sau GitOps? |
+|--------|----------|------------------------|
+| `AmazonSSMManagedInstanceCore` | Ansible provision qua SSM | ✅ Giu |
+| ECR policy (inline) | `GetAuthorizationToken`, `PutImage`, ... — chi cho `retail-store/*` | ✅ Giu |
+| EKS policy (inline) | `DescribeCluster`, `ListClusters`, `sts:GetCallerIdentity` | ❌ **Se loai bo** |
 
 **Security Group:** `jenkins-agent-sg`
 
 | Rule | Port | Source | Mo ta |
 |------|------|--------|-------|
 | Ingress | 22/TCP | `jenkins-sg` (Master SG) | SSH agent connection |
-| Egress | All | 0.0.0.0/0 | Outbound traffic |
+| Egress | All | 0.0.0.0/0 | Outbound traffic (ECR, GitHub) |
 
 #### SSH Key (dung chung Master + Agent)
 
@@ -333,9 +376,11 @@ Host duoc xac dinh bang **EC2 Instance ID** (khong phai IP), vi SSM dung instanc
 | 1 | `common` | APT cache update |
 | 2 | `java` | OpenJDK 17 (yeu cau cua Jenkins agent process) |
 | 3 | `docker` | Docker Engine (de build Docker images) |
-| 4 | `awscli` | AWS CLI v2 (de ECR login, EKS kubeconfig) |
-| 5 | `kubectl` | kubectl v1.29.0 (khop voi EKS cluster version) |
+| 4 | `awscli` | AWS CLI v2 (de ECR login) |
+| 5 | `kubectl` | kubectl v1.31.0 — **se loai bo sau GitOps** |
 | 6 | `jenkins-agent` | Tao user `jenkins`, SSH authorized_keys, working directory |
+
+> **Note ve role `kubectl`:** Sau khi chuyen sang GitOps hoan toan, Agent khong con goi `kubectl apply` nua, nen role nay co the loai bo. Hien tai giu lai de debug va fallback neu can.
 
 **Cach chay:**
 
@@ -394,18 +439,24 @@ Buoc 1:  01-network         (VPC, Subnets, NAT GW)
             │
             ├──────────────────────────────────────┐
             ▼                                      ▼
-Buoc 2:  02-cluster-eks     (song song)     03-jenkins-server
-         (EKS + ArgoCD)                     (Master + Agent EC2)
+Buoc 2:  05-ecr             (song song)     03-jenkins-server
+         (5 ECR repos)                      (Master + Agent EC2)
             │                                      │
-            ▼                                      ▼
-Buoc 3:  terraform apply    (cap quyen)     04-ansible-config
-         02-cluster-eks                     (Cai dat Jenkins, Docker, kubectl...)
-         (access entry +
-          SG rule cho Agent)
-                                                   │
-                                                   ▼
-Buoc 4:                                     05-ecr (ECR repos)
-                                            (chay bat ky luc nao, doc lap)
+            │                                      ▼
+            │                              04-ansible-config
+            │                              (Cai Jenkins, Docker, kubectl...)
+            │                                      │
+            │                                      │
+            └──────────────────┬───────────────────┘
+                               ▼
+Buoc 3:                  02-cluster-eks
+                      (EKS + ArgoCD + Access Entry
+                       cho Jenkins Agent)
+                               │
+                               ▼
+Buoc 4:                  kubectl apply -f
+                      retail-store-gitops/argocd/*.yml
+                      (onboard ArgoCD Application)
 ```
 
 **Dependency:**
@@ -466,32 +517,7 @@ Ghi lai `registry_id` tu output (= AWS Account ID, se dung khi cau hinh Jenkins)
 - **ECR** > Repositories > 5 repos `retail-store/*`
 - Click vao repo bat ky > Lifecycle Policy > 2 rules
 
-### Buoc 4: Trien khai EKS Cluster + Jenkins Server (chay song song)
-
-**Terminal 1 — EKS (mat 15-20 phut):**
-
-```bash
-cd ../02-cluster-eks
-terraform init
-terraform plan
-terraform apply
-```
-
-> Luu y: Lan dau chay chua co Jenkins Agent role/SG nen bo qua access entry va SG rule. Se apply lai o buoc 6.
-
-Sau khi xong, cau hinh kubectl:
-
-```bash
-aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
-kubectl get nodes          # 2 nodes Ready
-kubectl get pods -n argocd # ArgoCD pods Running
-```
-
-**Kiem tra AWS Console:**
-- **EKS** > Clusters > `ecommerce-cluster` > Status: Active
-- Tab **Compute** > Node groups > `main_nodes` > 2 nodes
-
-**Terminal 2 — Jenkins (song song voi EKS):**
+### Buoc 4: Trien khai Jenkins Server
 
 ```bash
 cd ../03-jenkins-server
@@ -509,7 +535,7 @@ terraform apply
 - **EC2** > Instances > `Jenkins-Master` + `Jenkins-Agent` (running)
 - **IAM** > Roles > `jenkins-ssm-role` + `jenkins-agent-role`
 
-### Buoc 5: Cau hinh bang Ansible
+### Buoc 5: Cau hinh Jenkins bang Ansible
 
 **5.1. Copy SSH key:**
 
@@ -545,19 +571,27 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml
 
 Ket qua mong doi: tat ca tasks `ok` hoac `changed`, khong co `failed`.
 
-### Buoc 6: Cap quyen EKS cho Jenkins Agent
-
-Sau khi buoc 4 (03-jenkins-server) hoan tat, quay lai apply EKS de them access entry va SG rule:
+### Buoc 6: Trien khai EKS Cluster + ArgoCD
 
 ```bash
 cd ../02-cluster-eks
-terraform plan    # Xac nhan them: access_entry, policy_association, security_group_rule
-terraform apply
+terraform init
+terraform plan
+terraform apply    # ~15-20 phut
+```
+
+Sau khi xong, cau hinh kubectl (tu may local hoac Jenkins Agent):
+
+```bash
+aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
+kubectl get nodes          # 2 nodes Ready
+kubectl get pods -n argocd # ArgoCD pods Running
 ```
 
 **Kiem tra AWS Console:**
-- **EKS** > `ecommerce-cluster` > tab **Access** > thay `jenkins-agent-role`
-- **EC2** > Security Groups > SG cua EKS cluster > Inbound rules > TCP 443 from `jenkins-agent-sg`
+- **EKS** > Clusters > `ecommerce-cluster` > Status: Active
+- Tab **Compute** > Node groups > `main_nodes` > 2 nodes
+- Tab **Access** > thay `jenkins-agent-role`
 
 ### Buoc 7: Mo Jenkins UI
 
@@ -595,6 +629,7 @@ Sau khi unlock Jenkins, can cau hinh them:
 
 **Manage Jenkins** > **Plugins** > **Available plugins** > tim va cai:
 - **SSH Agent** (ket noi agent qua SSH)
+- **Pipeline** (thuong co san sau khi install suggested plugins)
 
 ### Them Credentials
 
@@ -610,6 +645,24 @@ Sau khi unlock Jenkins, can cau hinh them:
 - Kind: **Secret text**
 - ID: `aws-account-id`
 - Secret: `<registry_id tu buoc 3>` (AWS Account ID)
+
+**Credential 3 — GitHub PAT cho GitOps:**
+- Kind: **Username with password**
+- ID: `github-gitops-token`
+- Username: `<GitHub username cua ban>`
+- Password: `<Fine-grained PAT cho repo retail-store-gitops>`
+
+**Quyen can thiet cua Fine-grained PAT** (nguyen tac least-privilege):
+
+| Permission | Access | Ly do |
+|-----------|--------|-------|
+| Contents | Read and write | `git clone` + `git push` |
+| Metadata | Read (auto) | Bat buoc cua GitHub |
+| *Cac quyen khac* | — | **Khong cap** |
+
+Repository scope: **Chi repo `retail-store-gitops`**, khong cap toan bo org/user.
+
+**Expiration:** Nen dat 90 ngay (khong chon "No expiration") — neu token leak thi van co TTL.
 
 ### Them Agent Node
 
@@ -633,6 +686,50 @@ Save > doi status chuyen thanh **Connected** (icon xanh).
 
 ---
 
+## Cai ArgoCD Application
+
+Sau khi EKS cluster co ArgoCD chay (Buoc 6), can dang ky Application de ArgoCD biet repo nao va folder nao can track.
+
+**7.1. Clone repo gitops:**
+
+```bash
+git clone https://github.com/<your-username>/retail-store-gitops.git
+cd retail-store-gitops
+```
+
+**7.2. Apply ArgoCD Application:**
+
+```bash
+# Dam bao kubectl da tro ve cluster
+aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
+
+# Apply Application definition
+kubectl apply -f argocd/ui-application.yml
+```
+
+**7.3. Kiem tra:**
+
+```bash
+kubectl get application -n argocd
+# NAME              SYNC STATUS   HEALTH STATUS
+# retail-store-ui   Synced        Healthy
+```
+
+**7.4. Truy cap ArgoCD UI:**
+
+```bash
+# Port-forward ArgoCD server
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+# Lay password admin ban dau
+kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath="{.data.password}" | base64 -d
+```
+
+Mo browser: `https://localhost:8080` — username `admin`, password tu command tren.
+
+---
+
 ## Chay Pipeline CI/CD
 
 ### Tao Pipeline Job
@@ -644,7 +741,8 @@ Save > doi status chuyen thanh **Connected** (icon xanh).
 Muc **Pipeline:**
 - Definition: **Pipeline script from SCM**
 - SCM: **Git**
-- Repository URL: `<github-repo-url>`
+- Repository URL: `<URL cua repo retail-store-microservices>`
+- Credentials: (them neu repo private)
 - Branch: `*/main`
 - Script Path: `src/ui/Jenkinsfile`
 - Save
@@ -654,24 +752,157 @@ Muc **Pipeline:**
 Click **Build Now**. Pipeline chay 3 stages:
 
 ```
-Build Docker Image  ──►  Push to ECR  ──►  Deploy to EKS
+Build Docker Image  ──►  Push to ECR  ──►  Update GitOps
 ```
 
 | Stage | Hanh dong |
 |-------|-----------|
-| Build Docker Image | Clone repo, build Docker image, tag bang commit hash |
-| Push to ECR | ECR login (IAM role), push image len ECR repository |
-| Deploy to EKS | `aws eks update-kubeconfig`, `kubectl apply` K8s manifests, doi rollout hoan tat |
+| Build Docker Image | Clone repo, build Docker image, tag bang `git rev-parse --short=7 HEAD` |
+| Push to ECR | ECR login (IAM role Agent), push image len ECR repository |
+| Update GitOps | Clone repo gitops, `sed` cap nhat image tag trong `apps/ui/deployment.yml`, commit + push |
 
-**Ket qua mong doi:** Build SUCCESS, image xuat hien tren ECR, pods chay tren EKS.
+**Ket qua mong doi:**
+- Build SUCCESS tren Jenkins
+- Image moi xuat hien tren ECR (check tab Images cua repo)
+- Commit moi xuat hien trong repo `retail-store-gitops` (author: Jenkins CI)
+- ArgoCD UI chuyen app `retail-store-ui` tu `Synced` -> `OutOfSync` -> `Syncing` -> `Synced` trong 3 phut
+- Pod moi duoc tao tren EKS, pod cu terminating (rolling update)
 
 **Kiem tra tren EKS:**
 ```bash
-kubectl get pods -n retail-store       # 2 pods Running
+kubectl get pods -n retail-store       # 2 pods Running (version moi)
 kubectl get svc ui -n retail-store     # External URL (LoadBalancer)
 ```
 
-Mo URL LoadBalancer tren browser de truy cap UI service.
+Mo URL LoadBalancer tren browser de kiem tra UI service.
+
+### Trigger tu dong (roadmap)
+
+Hien tai trigger thu cong. De tu dong:
+
+**Option A — Webhook GitHub -> Jenkins:**
+- Yeu cau Jenkins co URL public (ALB + HTTPS)
+- Repo GitHub > Settings > Webhooks > URL `https://<jenkins>/github-webhook/`
+- Pipeline: `triggers { githubPush() }`
+
+**Option B — Polling SCM** (don gian hon, khong can expose Jenkins):
+```groovy
+triggers {
+    pollSCM('H/5 * * * *')
+}
+```
+
+---
+
+## Thu hep quyen Jenkins Agent (post-GitOps)
+
+Sau khi chuyen sang mo hinh GitOps, Jenkins Agent **khong con can quyen truc tiep vao EKS cluster nua** — moi viec apply manifest da do ArgoCD dam nhan. Day la co hoi de thu hep be mat tan cong theo nguyen tac **least privilege**.
+
+### Danh sach thay doi code du kien
+
+> **Note:** Day la roadmap, code Terraform se duoc thuc hien sau. README nay ghi lai de theo doi.
+
+#### File `03-jenkins-server/agent-security.tf`
+
+**Loai bo** (comment out hoac delete):
+
+```hcl
+# EKS permissions - deploy workloads
+resource "aws_iam_role_policy" "agent_eks" {
+  name = "jenkins-agent-eks-policy"
+  # ...
+}
+```
+
+#### File `02-cluster-eks/eks.tf`
+
+**Loai bo** tu module `eks`:
+
+```hcl
+# Grant Jenkins Agent IAM role access to deploy workloads
+access_entries = {
+  jenkins_agent = {
+    principal_arn = data.aws_iam_role.jenkins_agent.arn
+    policy_associations = {
+      cluster_admin = {
+        policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+        # ...
+      }
+    }
+  }
+}
+```
+
+**Loai bo** resource:
+
+```hcl
+resource "aws_security_group_rule" "jenkins_agent_to_eks" {
+  # ...
+}
+```
+
+#### File `02-cluster-eks/data.tf`
+
+**Loai bo** data source khong con can:
+
+```hcl
+data "aws_iam_role" "jenkins_agent" { ... }
+data "aws_security_group" "jenkins_agent" { ... }
+```
+
+#### File `04-ansible-config/site.yaml` (tuy chon)
+
+**Loai bo** role `kubectl` khoi play `jenkins_agent` neu khong can debug:
+
+```yaml
+- hosts: jenkins_agent
+  roles:
+    - common
+    - java
+    - docker
+    - awscli
+    # - kubectl        # <-- loai bo
+    - jenkins-agent
+```
+
+### Loi ich sau khi thu hep
+
+| Khia canh | Cai thien |
+|-----------|-----------|
+| Blast radius neu Jenkins Agent bi compromise | Khong the `kubectl delete` cluster; chi co the push image xau len ECR |
+| Audit | IAM trust boundary ro rang: CI chi cham ECR + Git, CD chi cham Git + K8s |
+| Compliance | Passes "CI should not have admin access to runtime" (OWASP, CIS benchmarks) |
+| Drift control | Khong the `kubectl edit` thu cong tu Agent -> moi thay doi deu qua Git |
+
+### Thu tu thuc hien khi san sang
+
+```
+1. Xac nhan GitOps da on dinh (pipeline chay thanh cong vai lan)
+   │
+   ▼
+2. Sua 04-ansible-config/site.yaml (bo kubectl role) — optional
+   Chay lai ansible-playbook de uninstall kubectl tu Agent
+   │
+   ▼
+3. Sua 03-jenkins-server/agent-security.tf (bo agent_eks policy)
+   terraform apply   # Chi remove IAM policy
+   │
+   ▼
+4. Sua 02-cluster-eks/eks.tf (bo access_entries va SG rule)
+   Sua 02-cluster-eks/data.tf (bo data sources)
+   terraform apply   # Remove access entry + SG rule
+   │
+   ▼
+5. Verify: Jenkins Agent khong the `kubectl get nodes`
+   Verify: Pipeline van chay thanh cong (chi den buoc push GitOps)
+   Verify: ArgoCD van sync binh thuong
+```
+
+### Canh bao
+
+- **Khong thuc hien neu pipeline GitOps chua chay on dinh.** Mat quyen kubectl = mat kha nang deploy thu cong neu ArgoCD co su co.
+- **Lam tung buoc**, apply + verify tung thay doi. Khong destroy tat ca cung luc.
+- **Backup state** Terraform truoc khi sua.
 
 ---
 
@@ -698,20 +929,22 @@ Moi module co state file rieng, cho phep trien khai va quan ly doc lap.
 - Jenkins Master + Agent nam trong **private subnet** (khong co public IP)
 - Jenkins Master SG: chi mo port **8080 tu VPC CIDR**
 - Jenkins Agent SG: chi mo port **22 tu Jenkins Master SG**
-- EKS cluster SG: chi mo port **443 tu Jenkins Agent SG**
+- EKS cluster SG: chi mo port **443 tu Jenkins Agent SG** (se loai bo sau GitOps)
 - **Khong mo port 22 ra internet** — SSH qua AWS SSM Session Manager
-- NAT Gateway cho outbound traffic (apt, Docker pull, plugin download)
+- NAT Gateway cho outbound traffic (apt, Docker pull, plugin download, ECR, GitHub)
 
 ### Access Management
 - Jenkins Master: IAM role `jenkins-ssm-role` (chi SSM)
-- Jenkins Agent: IAM role `jenkins-agent-role` (SSM + ECR + EKS — least privilege)
+- Jenkins Agent: IAM role `jenkins-agent-role` (SSM + ECR + EKS — se thu hep xuong SSM + ECR)
 - ECR policy gioi han chi cho repositories `retail-store/*`
-- EKS access entry cap quyen cho Jenkins Agent role
+- EKS access entry cap quyen cho Jenkins Agent role (se loai bo sau GitOps)
+- GitHub PAT: scope chi mot repo `retail-store-gitops`, quyen `Contents: write`
 - SSH key tu sinh boi Terraform (RSA 4096-bit), luu local voi permission `0400`
 
 ### Secret Management
 - Jenkins admin password **fetch truc tiep ve file** (khong hien thi trong Ansible log)
 - AWS Account ID luu trong Jenkins Credentials (masked trong build log)
+- GitHub PAT luu trong Jenkins Credentials (masked trong build log)
 - Cac file nhay cam da them vao `.gitignore`:
   - `*.pem`, `*.key`, `*.secret`
   - `jenkins_initial_admin_password.txt`
@@ -722,6 +955,7 @@ Moi module co state file rieng, cho phep trien khai va quan ly doc lap.
 - Khong hardcode credentials trong code
 - Jenkins su dung **signed repository** (GPG key verification)
 - ECR bat **scan on push** cho moi image
+- GitOps model: moi thay doi cluster deu co audit trail qua Git history
 
 ---
 
@@ -761,17 +995,31 @@ Internet
 └───────────────────────────────────────────────────────┘
 ```
 
-**Security Group Flow:**
+**Security Group Flow (hien tai):**
 
 ```
 Jenkins Master (jenkins-sg)
     │ port 22 (SSH)
     ▼
 Jenkins Agent (jenkins-agent-sg)
-    │ port 443 (HTTPS)
+    │ port 443 (HTTPS) — SE LOAI BO
     ▼
 EKS Cluster (eks-cluster-sg)
 ```
+
+**Security Group Flow (sau khi thu hep quyen):**
+
+```
+Jenkins Master (jenkins-sg)
+    │ port 22 (SSH)
+    ▼
+Jenkins Agent (jenkins-agent-sg)
+    │ outbound only: ECR, GitHub, NAT GW
+    ▼
+(Internet)
+```
+
+EKS Cluster khong con nhan traffic tu Jenkins — chi ArgoCD trong cluster pull tu Git.
 
 ---
 
@@ -789,26 +1037,33 @@ Tat ca AWS resources duoc auto-tag qua Terraform provider `default_tags`:
 
 ## Teardown (Huy ha tang)
 
-Thuc hien **nguoc thu tu** trien khai:
+Thu tu destroy **rat quan trong** vi co cross-module dependency (02-cluster-eks tham chieu SG cua 03-jenkins-server):
 
 ```bash
-# 1. Xoa workloads tren EKS truoc (tranh orphaned resources)
+# 1. Xoa ArgoCD Applications TRUOC (tranh ArgoCD co gang recreate resource da bi xoa)
+kubectl delete application --all -n argocd
+
+# 2. Xoa workload namespace
 kubectl delete namespace retail-store
 
-# 2. Xoa Jenkins Master + Agent
-cd 03-jenkins-server && terraform destroy
+# 3. Xoa EKS Cluster TRUOC (vi co SG rule + access entry tham chieu jenkins-agent)
+cd 02-cluster-eks && terraform destroy
 
-# 3. Xoa EKS Cluster + ArgoCD
-cd ../02-cluster-eks && terraform destroy
+# 4. Xoa Jenkins Master + Agent (SG khong con bi reference)
+cd ../03-jenkins-server && terraform destroy
 
-# 4. Xoa VPC
+# 5. Xoa VPC
 cd ../01-network && terraform destroy
 
-# 5. (Tuy chon) Xoa ECR — chi khi khong can nua
+# 6. (Tuy chon) Xoa ECR — chi khi khong can nua
 cd ../05-ecr && terraform destroy
 ```
 
 > **Canh bao:** `terraform destroy` xoa toan bo resources. Dam bao da backup du lieu truoc khi chay.
+>
+> **Neu gap loi DependencyViolation khi xoa SG:** Kiem tra xem co module nao dang tham chieu SG do khong. Destroy module tham chieu truoc.
+>
+> **Neu gap loi IAM role / Security Group khong tim thay khi destroy module 02 lan 2:** Data source da bi orphan. Chay `terraform state rm data.aws_iam_role.jenkins_agent` va `terraform state rm data.aws_security_group.jenkins_agent` truoc khi destroy.
 
 ---
 
