@@ -3,4 +3,17 @@
 .terraform.lock.hcl
 jenkins_initial_admin_password.txt
 .claude
-*.pem, *.key, *.secret, *pub
+# Sensitive files — never commit
+*.pem
+*.key
+*.secret
+*.pub
+
+# Terraform local state backups (if any slip through)
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# Ansible runtime artifacts
+04-ansible-config/jenkins_initial_admin_password.txt
