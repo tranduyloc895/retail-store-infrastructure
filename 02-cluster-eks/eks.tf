@@ -35,6 +35,17 @@ module "eks" {
 
   enable_cluster_creator_admin_permissions = true
 
+  # EKS managed addons
+  # - aws-ebs-csi-driver: cần thiết để provisioning PVC qua EBS
+  #   (plugin in-tree kubernetes.io/aws-ebs đã deprecated ở K8s 1.23+
+  #    và bị vô hiệu hóa dần ở 1.27+; bắt buộc dùng CSI driver)
+  cluster_addons = {
+    aws-ebs-csi-driver = {
+      most_recent              = true
+      service_account_role_arn = module.ebs_csi_irsa.iam_role_arn
+    }
+  }
+
   # Note: `access_entries` for Jenkins Agent was removed after migrating to GitOps.
   # ArgoCD (running in-cluster) now handles all kubectl apply operations.
   # Jenkins Agent only needs to push images to ECR and commits to the gitops repo.
