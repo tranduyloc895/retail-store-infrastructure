@@ -13,10 +13,12 @@
   hosts: jenkins_agent
   become: yes
 
+  # Note: role 'kubectl' was removed after migrating to GitOps.
+  # Jenkins Agent no longer calls kubectl directly — ArgoCD handles deployment.
+  # The role code is kept under roles/kubectl/ for potential future reuse.
   roles:
     - common
     - java
     - docker
     - awscli
-    - kubectl
     - jenkins-agent
