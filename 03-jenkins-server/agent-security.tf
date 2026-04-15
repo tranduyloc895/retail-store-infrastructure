@@ -52,31 +52,11 @@ resource "aws_iam_role_policy" "agent_ecr" {
   })
 }
 
-# EKS permissions - deploy workloads
-resource "aws_iam_role_policy" "agent_eks" {
-  name = "jenkins-agent-eks-policy"
-  role = aws_iam_role.jenkins_agent_role.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "eks:DescribeCluster",
-          "eks:ListClusters"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "sts:GetCallerIdentity"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
+# EKS permissions intentionally removed.
+# After migrating to GitOps (ArgoCD pull-based model), Jenkins Agent
+# no longer calls `aws eks update-kubeconfig` or `kubectl`. Image updates
+# are committed to the gitops repo and ArgoCD applies them to the cluster.
+# This narrows Jenkins Agent IAM permissions to SSM + ECR only.
 
 resource "aws_iam_instance_profile" "jenkins_agent" {
   name = "jenkins-agent-instance-profile"

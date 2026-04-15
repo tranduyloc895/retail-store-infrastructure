@@ -17,12 +17,7 @@ data "aws_subnets" "private" {
   }
 }
 
-# Lookup Jenkins Agent IAM role (created by 03-jenkins-server)
-data "aws_iam_role" "jenkins_agent" {
-  name = "jenkins-agent-role"
-}
-
-# Lookup Jenkins Agent Security Group (created by 03-jenkins-server)
-data "aws_security_group" "jenkins_agent" {
-  name = "jenkins-agent-sg"
-}
+# Data sources for Jenkins Agent IAM role and Security Group were removed
+# after migrating to GitOps. Module 02-cluster-eks no longer references
+# anything from 03-jenkins-server, eliminating the cross-module dependency
+# that previously caused issues during teardown.
