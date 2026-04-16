@@ -14,11 +14,13 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
   - [03-jenkins-server: Jenkins Master & Agent](#03-jenkins-server-jenkins-master--agent)
   - [04-ansible-config: Configuration Management](#04-ansible-config-configuration-management)
   - [05-ecr: Elastic Container Registry](#05-ecr-elastic-container-registry)
+  - [06-monitoring: Observability Stack](#06-monitoring-observability-stack)
 - [Thu tu trien khai](#thu-tu-trien-khai)
 - [Huong dan trien khai chi tiet](#huong-dan-trien-khai-chi-tiet)
 - [Cau hinh Jenkins UI](#cau-hinh-jenkins-ui)
 - [Cai ArgoCD Application](#cai-argocd-application)
 - [Chay Pipeline CI/CD](#chay-pipeline-cicd)
+- [Phase 3 — Trien khai Monitoring](#phase-3--trien-khai-monitoring)
 - [Thu hep quyen Jenkins Agent (da thuc hien)](#thu-hep-quyen-jenkins-agent-da-thuc-hien)
 - [Quan ly Terraform State](#quan-ly-terraform-state)
 - [Bao mat](#bao-mat)
@@ -189,11 +191,24 @@ infrastructure/
 │           ├── tasks/main.yaml
 │           └── defaults/main.yaml
 │
-└── 05-ecr/                               # Layer 5: Container Registry
-    ├── provider.tf                       #   AWS provider + S3 backend
-    ├── ecr.tf                            #   5 ECR repos + lifecycle policies
-    ├── variables.tf                      #   Input variables
-    └── outputs.tf                        #   Repository URLs, registry ID
+├── 05-ecr/                               # Layer 5: Container Registry
+│   ├── provider.tf                       #   AWS provider + S3 backend
+│   ├── ecr.tf                            #   5 ECR repos + lifecycle policies
+│   ├── variables.tf                      #   Input variables
+│   └── outputs.tf                        #   Repository URLs, registry ID
+│
+└── 06-monitoring/                        # Layer 6: Observability (Helm imperative)
+    ├── README.md                         #   Huong dan rieng cho module
+    ├── storageclass-gp3.yaml             #   Default StorageClass (CSI-backed)
+    ├── values-kube-prometheus-stack.yaml #   Prometheus + Grafana + Alertmanager config
+    ├── values-loki.yaml                  #   Loki SingleBinary mode
+    ├── values-promtail.yaml              #   Promtail DaemonSet (log shipper)
+    └── dashboards/
+        ├── apply-dashboards.ps1          #   Dong goi JSON -> ConfigMap (server-side apply)
+        ├── node-exporter-full.json       #   Dashboard 1860
+        ├── k8s-cluster-monitoring.json   #   Dashboard 315
+        ├── logs-app-loki.json            #   Dashboard 13639
+        └── k8s-views-pods.json           #   Dashboard 15760
 ```
 
 ---
@@ -250,6 +265,22 @@ infrastructure/
 | Capacity Type | `ON_DEMAND` |
 | Scaling | Min 2, Max 3, Desired 2 |
 | Disk Size | 50 GB |
+
+#### Cluster Addons (EKS managed)
+
+| Addon | Phien ban | Muc dich |
+|-------|-----------|----------|
+| `aws-ebs-csi-driver` | `most_recent` | Dynamic PVC provisioning cho stateful workload. **Bat buoc** tu K8s 1.23+ vi plugin in-tree `kubernetes.io/aws-ebs` da deprecated. |
+
+IAM permission cho EBS CSI cap qua **IRSA (IAM Role for Service Account)** — file `irsa-ebs-csi.tf`:
+- Module: `terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks`
+- Role name: `${cluster_name}-ebs-csi-driver`
+- Policy attach: `AmazonEBSCSIDriverPolicy` (managed by AWS)
+- Service account: `kube-system:ebs-csi-controller-sa`
+
+> **Tai sao IRSA thay vi cap quyen cho node role?** Nguyen tac least-privilege: chi pod controller CSI duoc assume role nay, khong phai toan bo workload chay tren node.
+
+**Hau qua o layer sau:** Module `06-monitoring` tao StorageClass `gp3` voi provisioner `ebs.csi.aws.com` — PVC cua Prometheus/Loki/Grafana tu dong binding.
 
 #### ArgoCD (GitOps Controller)
 
@@ -433,6 +464,81 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
 
 ---
 
+### 06-monitoring: Observability Stack
+
+**Muc dich:** Thu thap metrics va logs tap trung tu toan cluster, hien thi qua Grafana.
+
+**Deployment method:** Helm imperative (Option A). Se migrate sang ArgoCD GitOps (Option B) o Phase 3.2.
+
+> Chi tiet trien khai tung buoc xem trong [`06-monitoring/README.md`](./06-monitoring/README.md). Muc nay tom luoc kien truc + quyet dinh.
+
+#### Stack components
+
+| Component | Chart | Version | Vai tro |
+|-----------|-------|---------|---------|
+| `kube-prometheus-stack` | `prometheus-community/kube-prometheus-stack` | 58.0.0 | Bundle: Prometheus + Alertmanager + Grafana + node-exporter + kube-state-metrics + Prometheus Operator CRDs |
+| `loki` | `grafana/loki` | 6.6.0 | Log aggregation (SingleBinary mode, filesystem storage) |
+| `promtail` | `grafana/promtail` | 6.16.0 | Log shipper (DaemonSet, tail `/var/log/pods/*`) |
+
+#### Pham vi giam sat
+
+| Lop | Thu thap gi |
+|-----|-------------|
+| **System** (node-exporter) | CPU/RAM/Disk/Network tung EKS worker node |
+| **Platform** (kube-state-metrics + kubelet) | Trang thai pod/deployment/PVC, restart, OOMKill, per-container CPU/RAM |
+| **Control plane** (EKS API server) | Request rate, latency per verb |
+| **Logs** (Promtail -> Loki) | Stdout/stderr MOI pod: kube-system, argocd, monitoring, retail-store |
+| **Application metrics** (HTTP rate, p95, 5xx) | **CHUA co** — scope Phase 3.2 (instrumentation UI + ServiceMonitor) |
+
+#### Resource footprint
+
+| Resource | Config | Muc dich |
+|----------|--------|----------|
+| Prometheus PVC | 20Gi gp3 | TSDB, retention 15 ngay |
+| Grafana PVC | 5Gi gp3 | UI config + dashboards cache |
+| Alertmanager PVC | 2Gi gp3 | Silence state |
+| Loki PVC | 10Gi gp3 | Log chunks, retention 7 ngay |
+
+Tong them ~37Gi EBS gp3 / cluster (chi phi ~$4/thang).
+
+#### Grafana access
+
+- Mac dinh: `ClusterIP` + `kubectl port-forward svc/kps-grafana 3000:80`
+- Khi demo: doi `service.type: LoadBalancer` trong values file, `helm upgrade`, lay ELB hostname
+- Password admin: sinh ngau nhien qua `openssl rand`, truyen qua `--set` luc install (**khong commit**)
+
+#### Dashboards
+
+4 dashboard community import qua ConfigMap + Grafana sidecar pattern:
+
+| ID | Ten | Muc dich |
+|----|-----|----------|
+| 1860 | Node Exporter Full | System metrics per node |
+| 315 | Kubernetes Cluster Monitoring | Overview cluster |
+| 13639 | Logs / App (Loki) | Log viewer realtime |
+| 15760 | Kubernetes Views / Pods | Pod drill-down |
+
+Dashboard duoc dong goi qua `apply-dashboards.ps1` dung **server-side apply** de vuot qua gioi han 256KB cua annotation `kubectl.kubernetes.io/last-applied-configuration` (dashboard 1860 ~250KB).
+
+#### Quyet dinh thiet ke
+
+| Quyet dinh | Ly do |
+|------------|-------|
+| **Helm imperative (Option A)** thay vi GitOps ngay | Tinh chinh values nhanh trong giai doan hoc; migrate sang ArgoCD khi stack on dinh |
+| **Loki SingleBinary mode** (khong phai SimpleScalable) | Phu hop log <100GB/ngay, it component -> it diem loi |
+| **filesystem storage** (khong phai S3) | Don gian, khong can IAM role them; scale duoc sau bang cach doi `storage.type: s3` |
+| **`serviceMonitorSelectorNilUsesHelmValues: false`** | Cho phep Prometheus scrape ServiceMonitor o MOI namespace (khong phai label `release=kps`) — tien cho onboard app |
+| **Tat EKS control plane components** (`kubeEtcd`, `kubeControllerManager`, `kubeScheduler`, `kubeProxy`) | EKS managed, khong expose port scrape |
+| **`promtail.serviceMonitor.enabled: false`** | Workaround bug template `service-metrics.yaml` trong chart v6.16.0 |
+| **StorageClass `gp3` default** thay vi `gp2` | Re hon ~20%, cho phep tuy chinh IOPS/throughput doc lap; dung CSI provisioner `ebs.csi.aws.com` |
+
+#### Phu thuoc
+
+- `02-cluster-eks` da chay (cluster + EBS CSI driver addon)
+- Khong phu thuoc `03-jenkins-server` hay `05-ecr`
+
+---
+
 ## Thu tu trien khai
 
 ```
@@ -451,20 +557,25 @@ Buoc 2:  05-ecr             (song song)     03-jenkins-server
             └──────────────────┬───────────────────┘
                                ▼
 Buoc 3:                  02-cluster-eks
-                      (EKS + ArgoCD + Access Entry
-                       cho Jenkins Agent)
+                      (EKS + ArgoCD + EBS CSI Addon)
                                │
                                ▼
 Buoc 4:                  kubectl apply -f
                       retail-store-gitops/argocd/*.yml
                       (onboard ArgoCD Application)
+                               │
+                               ▼
+Buoc 5 (Phase 3):        06-monitoring
+                      (Helm install: kube-prometheus-stack
+                       + Loki + Promtail + Dashboards)
 ```
 
 **Dependency:**
 - `02-cluster-eks` va `03-jenkins-server` deu phu thuoc `01-network` (can VPC + subnets)
-- `02-cluster-eks` can `03-jenkins-server` da chay truoc (de lookup Jenkins Agent IAM role + SG)
 - `04-ansible-config` can `03-jenkins-server` (can EC2 Instance ID + SSH key)
 - `05-ecr` doc lap, chay bat ky luc nao
+- `06-monitoring` can `02-cluster-eks` da co EBS CSI driver addon (de tao PVC)
+- **Khong con cross-module dependency** `02 <-> 03` sau khi thu hep quyen Jenkins Agent (xem muc [Thu hep quyen](#thu-hep-quyen-jenkins-agent-da-thuc-hien))
 
 ---
 
@@ -794,6 +905,148 @@ triggers {
 ```
 ---
 
+## Phase 3 — Trien khai Monitoring
+
+Sau khi pipeline CI/CD da chay on dinh, trien khai observability stack de thu thap metrics + logs tap trung.
+
+### Pre-flight check
+
+Truoc khi cai monitoring, verify cluster co du prerequisite:
+
+```powershell
+# [1] Context dung cluster
+kubectl config current-context
+# → Expected: arn:aws:eks:ap-southeast-1:...:cluster/ecommerce-cluster
+
+# [2] Node Ready
+kubectl get nodes
+# → 2 node Ready, version v1.31.x
+
+# [3] EBS CSI driver pod chay (quan trong)
+kubectl get pods -n kube-system | Select-String "ebs-csi"
+# → Phai co ebs-csi-controller-* va ebs-csi-node-*
+
+# [4] StorageClass gp3 default
+kubectl get storageclass
+# → gp3 (default), provisioner = ebs.csi.aws.com
+```
+
+**Neu thieu EBS CSI driver:** module `02-cluster-eks` da co `cluster_addons` + `irsa-ebs-csi.tf`. Chay `terraform apply` trong module do.
+
+**Neu thieu `gp3` StorageClass:**
+```powershell
+cd 06-monitoring
+kubectl apply -f storageclass-gp3.yaml
+kubectl patch storageclass gp2 -p '{\"metadata\": {\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"false\"}}}'
+```
+
+### Cai dat
+
+**1. Tao namespace:**
+```powershell
+kubectl create namespace monitoring
+kubectl label namespace monitoring purpose=observability
+```
+
+**2. Them Helm repos:**
+```powershell
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+```
+
+**3. Sinh password Grafana va luu vao password manager:**
+```powershell
+$GRAFANA_PASSWORD = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 24 | ForEach-Object {[char]$_})
+Write-Host "Grafana admin password: $GRAFANA_PASSWORD"
+```
+
+**4. Cai kube-prometheus-stack:**
+```powershell
+cd 06-monitoring
+
+helm install kps prometheus-community/kube-prometheus-stack `
+  --namespace monitoring `
+  --version 58.0.0 `
+  -f values-kube-prometheus-stack.yaml `
+  --set grafana.adminPassword="$GRAFANA_PASSWORD" `
+  --wait --timeout 10m
+```
+
+**5. Cai Loki + Promtail:**
+```powershell
+helm install loki grafana/loki `
+  --namespace monitoring `
+  --version 6.6.0 `
+  -f values-loki.yaml `
+  --wait --timeout 5m
+
+helm install promtail grafana/promtail `
+  --namespace monitoring `
+  --version 6.16.0 `
+  -f values-promtail.yaml `
+  --wait --timeout 3m
+```
+
+**6. Import 4 dashboards:**
+```powershell
+cd dashboards
+.\apply-dashboards.ps1
+```
+
+### Verify
+
+```powershell
+# Tat ca pod Running
+kubectl -n monitoring get pods
+
+# PVC Bound (3 cai: prometheus, alertmanager, grafana + 1 loki = 4)
+kubectl -n monitoring get pvc
+
+# 4 ConfigMap dashboards
+kubectl -n monitoring get configmap -l grafana_dashboard=1
+
+# Sidecar da load dashboards
+kubectl -n monitoring logs deployment/kps-grafana -c grafana-sc-dashboard --tail=20 | Select-String "Writing"
+```
+
+### Truy cap Grafana
+
+```powershell
+kubectl -n monitoring port-forward svc/kps-grafana 3000:80
+```
+
+Browser `http://localhost:3000` — username `admin`, password tu buoc 3.
+
+Kiem tra:
+- **Connections → Data sources:** Prometheus va Loki deu "Save & test" thanh cong
+- **Dashboards → Kubernetes folder:** 4 dashboards co data
+- **Explore → Prometheus:** query `up` ra series
+- **Explore → Loki:** query `{namespace="monitoring"}` ra logs
+
+### Troubleshooting
+
+| Trieu chung | Nguyen nhan | Fix |
+|-------------|-------------|-----|
+| Pod Prometheus Pending | PVC khong binding (thieu CSI driver) | Verify `kubectl get pods -n kube-system \| Select-String ebs-csi` |
+| Pod Prometheus Pending voi "Insufficient memory" | Node t3.large 2 node khong du | Scale `node_desired_size = 3` trong `02-cluster-eks/variables.tf`, `terraform apply` |
+| Promtail install fail "YAML parse error service-metrics.yaml" | Bug chart 6.16.0 voi `serviceMonitor.enabled=true` | File `values-promtail.yaml` da dat `serviceMonitor.enabled: false` |
+| Dashboard import lon fail "annotations: Too long" | Dashboard JSON ~250KB vuot gioi han 256KB cua annotation client-side apply | Script `apply-dashboards.ps1` dung `kubectl apply --server-side=true --force-conflicts` |
+| Grafana datasource Loki "Unable to connect" | Service name sai trong `additionalDataSources` | Verify: `kubectl exec deploy/kps-grafana -c grafana -- wget -qO- http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/labels` |
+| `kubectl top` bao "Metrics API not available" | Chua cai metrics-server | `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml` |
+
+Chi tiet xem [`06-monitoring/README.md`](./06-monitoring/README.md#known-issues).
+
+### Roadmap
+
+Sau Phase 3.1 (hien tai):
+- **Phase 3.2:** Migrate stack monitoring tu Helm imperative sang ArgoCD GitOps (Option B). Tao ArgoCD Application cho kps + Loki + Promtail, commit values files + dashboards vao `retail-store-gitops`.
+- **Phase 3.3:** Instrument 5 microservice — expose `/metrics`, tao `ServiceMonitor` CRD, import dashboard chuyen cho app.
+- **Phase 3.4:** PrometheusRule custom + Alertmanager routing Slack/Discord/Email.
+- **Phase 3.5:** Distributed tracing (Tempo hoac Jaeger).
+
+---
+
 #### `04-ansible-config/site.yaml`
 Da loai bo role `kubectl` khoi play `jenkins_agent`. Folder `roles/kubectl/` van duoc giu lai de tai su dung neu can.
 
@@ -914,10 +1167,20 @@ Moi module co state file rieng, cho phep trien khai va quan ly doc lap.
 - Jenkins admin password **fetch truc tiep ve file** (khong hien thi trong Ansible log)
 - AWS Account ID luu trong Jenkins Credentials (masked trong build log)
 - GitHub PAT luu trong Jenkins Credentials (masked trong build log)
+- **Grafana admin password** sinh random tai local (PowerShell `Get-Random` 24 ky tu), truyen vao Helm qua `--set grafana.adminPassword=...` — **khong commit vao Git**, khong hardcode trong `values-*.yaml`
 - Cac file nhay cam da them vao `.gitignore`:
   - `*.pem`, `*.key`, `*.secret`
   - `jenkins_initial_admin_password.txt`
   - `.terraform/`, `.terraform.lock.hcl`
+
+### Monitoring Security (Phase 3)
+- **Grafana Service type = `ClusterIP`** (khong expose public) — truy cap qua `kubectl port-forward svc/kps-grafana 3000:80`
+- **Prometheus + Alertmanager** cung la `ClusterIP` — debug qua port-forward, khong co endpoint public
+- **Loki gateway** la `ClusterIP` — chi Grafana trong cluster goi qua DNS `loki-gateway.monitoring.svc.cluster.local`
+- **EBS volumes encrypted at-rest** (StorageClass `gp3` co `parameters.encrypted: "true"`) — Prometheus TSDB + Loki chunks + Grafana DB deu duoc ma hoa
+- **IRSA cho EBS CSI controller** — role `${cluster_name}-ebs-csi-driver` chi co policy `AmazonEBSCSIDriverPolicy`, scope gioi han OIDC provider cua cluster (least privilege)
+- **Log scraping**: Promtail chay voi ServiceAccount co quyen `get/list/watch` tren pods trong moi namespace — **khong co quyen write** len cluster resource
+- Neu demo hoi dong can expose Grafana, doi sang `LoadBalancer` **tam thoi** roi revert — tranh de ELB public 24/7
 
 ### Compliance
 - Tat ca Ansible tasks dung **native modules** (khong dung shell/command) — idempotent va auditable
@@ -925,6 +1188,7 @@ Moi module co state file rieng, cho phep trien khai va quan ly doc lap.
 - Jenkins su dung **signed repository** (GPG key verification)
 - ECR bat **scan on push** cho moi image
 - GitOps model: moi thay doi cluster deu co audit trail qua Git history
+- Helm releases (`kps`, `loki`, `promtail`) pin version `--version X.Y.Z` de reproducible — tranh chart drift giua cac lan install
 
 ---
 
@@ -999,7 +1263,18 @@ Tat ca AWS resources duoc auto-tag qua Terraform provider `default_tags`:
 Sau khi thu hep quyen Jenkins Agent, **khong con cross-module dependency giua 02 va 03** — destroy theo thu tu nao cung duoc (hoac chay song song de tiet kiem thoi gian):
 
 ```bash
-# 1. Xoa ArgoCD Applications TRUOC (tranh ArgoCD co gang recreate resource da bi xoa)
+# 0. (Khuyen nghi) Go monitoring stack truoc de xoa sach PVC + EBS volumes
+#    Neu bo qua, terraform destroy van xoa duoc cluster nhung co the de lai
+#    EBS volume mo coi (status "available") trong AWS — tinh phi $0.08/GB/thang
+helm uninstall promtail -n monitoring
+helm uninstall loki     -n monitoring
+helm uninstall kps      -n monitoring
+kubectl -n monitoring delete pvc --all        # xoa PVC -> EBS volume tu xoa (reclaimPolicy=Delete)
+kubectl delete namespace monitoring
+# (Tuy chon) xoa CRDs cua Prometheus Operator neu khong con release nao dung:
+#   kubectl get crd -o name | Select-String "monitoring.coreos.com" | ForEach-Object { kubectl delete $_ }
+
+# 1. Xoa ArgoCD Applications (tranh ArgoCD co gang recreate resource da bi xoa)
 kubectl delete application --all -n argocd
 
 # 2. Xoa workload namespace
@@ -1020,6 +1295,8 @@ cd ../05-ecr && terraform destroy
 ```
 
 > **Canh bao:** `terraform destroy` xoa toan bo resources. Dam bao da backup du lieu truoc khi chay.
+>
+> **Luu y EBS volumes (monitoring):** PVC cua Prometheus (20Gi), Loki (10Gi), Grafana (5Gi), Alertmanager (2Gi) lien ket voi EBS volume tu dong. Neu skip buoc 0 va destroy cluster truc tiep, AWS se de lai volume o trang thai `available`. Vao **AWS Console > EC2 > Volumes**, loc theo tag `Project=DevSecOps-Ecommerce` va status `available`, xoa tay de tranh phi luu tru.
 >
 > **Lich su:** Truoc khi thu hep quyen, module 02 tham chieu SG va IAM role cua module 03 qua data source — phai destroy 02 truoc, neu khong se gap loi `DependencyViolation` khi AWS xoa SG. Sau khi thu hep, dependency nay da bi loai bo hoan toan.
 
