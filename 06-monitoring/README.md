@@ -1,49 +1,48 @@
 # 06-monitoring — Observability Stack
 
-Trien khai stack giam sat cho EKS cluster: **Prometheus + Grafana + Loki + Promtail**.
+Monitoring stack for the EKS cluster: **Prometheus + Grafana + Loki + Promtail**.
 
-Deployment method: **Helm imperative (Option A)**. Se migrate sang GitOps (Option B, ArgoCD manage) o Phase 3.2.
+Deployment method: **Helm imperative (Option A)**. Will migrate to GitOps (Option B, ArgoCD-managed) in Phase 3.2.
 
 ---
 
-## Muc luc
+## Table of Contents
 
-- [Muc dich & Pham vi](#muc-dich--pham-vi)
-- [Kien truc](#kien-truc)
-- [Cau truc thu muc](#cau-truc-thu-muc)
+- [Purpose & Scope](#purpose--scope)
+- [Architecture](#architecture)
+- [Directory Structure](#directory-structure)
 - [Prerequisites](#prerequisites)
-- [Trien khai](#trien-khai)
-- [Truy cap Grafana](#truy-cap-grafana)
+- [Deployment](#deployment)
+- [Access Grafana](#access-grafana)
 - [Dashboards](#dashboards)
-- [Cac query mau](#cac-query-mau)
-- [Known issues](#known-issues)
-- [Teardown](#teardown)
+- [Sample Queries](#sample-queries)
+- [Teardown (Cleanup After Each Lab)](#teardown-cleanup-after-each-lab)
 
 ---
 
-## Muc dich & Pham vi
+## Purpose & Scope
 
-### Dang monitor gi (sau Phase 3.1)
+### What is being monitored (after Phase 3.1)
 
-| Lop | Component | Thu thap gi |
-|-----|-----------|-------------|
-| **System** | `node-exporter` (DaemonSet) | CPU/RAM/Disk/Network cua tung EKS worker node |
-| **Platform** | `kube-state-metrics` | Trang thai pod/deployment/PVC, restart count, OOMKill |
+| Layer | Component | Collected data |
+|-------|-----------|----------------|
+| **System** | `node-exporter` (DaemonSet) | CPU/RAM/Disk/Network for every EKS worker node |
+| **Platform** | `kube-state-metrics` | Pod/Deployment/PVC state, restart count, OOMKill |
 | **Platform** | `kubelet / cAdvisor` (EKS built-in) | CPU/RAM per container |
 | **Platform** | EKS API server | Request rate, latency per verb |
 | **Self** | Prometheus, Loki, Grafana, Alertmanager | Meta-monitoring |
-| **Logs** | Promtail DaemonSet | Stdout/stderr cua MOI pod (kube-system, argocd, monitoring, retail-store,...) |
+| **Logs** | Promtail DaemonSet | Stdout/stderr of every pod (kube-system, argocd, monitoring, retail-store, ...) |
 
-### CHUA co (scope Phase 3.2 tro di)
+### Not yet covered (scope Phase 3.2+)
 
-- Application metrics cua UI service (HTTP rate, latency p95, 5xx rate, business metrics)
-- PrometheusRule custom + Alertmanager routing Slack/Email
-- Distributed tracing (Tempo/Jaeger)
-- ServiceMonitor cho 5 microservice
+- Application metrics for the UI service (HTTP rate, latency p95, 5xx rate, business metrics)
+- Custom `PrometheusRule` + Alertmanager routing to Slack / Email
+- Distributed tracing (Tempo / Jaeger)
+- ServiceMonitor for the 5 microservices
 
 ---
 
-## Kien truc
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -53,14 +52,13 @@ Deployment method: **Helm imperative (Option A)**. Se migrate sang GitOps (Optio
 │  │ Prometheus  │◄────────────┤ kube-state-metrics       │   │
 │  │  (TSDB)     │◄────────────┤ node-exporter (DaemonSet)│   │
 │  │  20Gi gp3   │◄────────────┤ kubelet / cAdvisor       │   │
-│  │  retention  │             │ ServiceMonitors          │   │
-│  │  15 ngay    │             └──────────────────────────┘   │
-│  └─────┬───────┘                                            │
+│  │  15d retent │             │ ServiceMonitors          │   │
+│  └─────┬───────┘             └──────────────────────────┘   │
 │        │ query                                              │
 │        ▼                                                    │
 │  ┌─────────────┐       query      ┌─────────────────────┐   │
 │  │  Grafana    │──────────────────►│ Loki (SingleBinary) │   │
-│  │  5Gi gp3    │                   │ 10Gi gp3, 7d retention   │
+│  │  5Gi gp3    │                   │ 10Gi gp3, 7d retent │   │
 │  │  ClusterIP  │                   └─────────▲───────────┘   │
 │  └─────┬───────┘                             │ push          │
 │        │                                     │               │
@@ -77,17 +75,17 @@ Deployment method: **Helm imperative (Option A)**. Se migrate sang GitOps (Optio
 
 ---
 
-## Cau truc thu muc
+## Directory Structure
 
 ```
 06-monitoring/
-├── README.md                             # File nay
-├── storageclass-gp3.yaml                 # Default StorageClass dung CSI provisioner
-├── values-kube-prometheus-stack.yaml     # Override chart defaults cho t3.large nodes
+├── README.md                             # This file
+├── storageclass-gp3.yaml                 # Default StorageClass using the CSI provisioner
+├── values-kube-prometheus-stack.yaml     # Chart values tuned for t3.large nodes
 ├── values-loki.yaml                      # Loki SingleBinary mode config
 ├── values-promtail.yaml                  # Promtail DaemonSet config
 └── dashboards/
-    ├── apply-dashboards.ps1              # Script PowerShell dong goi JSON -> ConfigMap
+    ├── apply-dashboards.ps1              # PowerShell script packaging JSON → ConfigMap
     ├── node-exporter-full.json           # Grafana dashboard 1860
     ├── k8s-cluster-monitoring.json       # Grafana dashboard 315
     ├── logs-app-loki.json                # Grafana dashboard 13639
@@ -98,50 +96,50 @@ Deployment method: **Helm imperative (Option A)**. Se migrate sang GitOps (Optio
 
 ## Prerequisites
 
-| Yeu cau | Tai sao |
-|---------|---------|
-| EKS cluster `ecommerce-cluster` dang chay | Target deploy |
-| `kubectl` tro dung context | Moi lenh apply deu can |
-| **EBS CSI driver addon** (installed via Terraform o `02-cluster-eks`) | Bat buoc — K8s 1.31 da deprecate in-tree provisioner `kubernetes.io/aws-ebs`. Khong co CSI driver, PVC cua Prometheus/Loki/Grafana se Pending vinh vien |
-| StorageClass `gp3` la default, provisioner `ebs.csi.aws.com` | Bien trong values files tham chieu `gp3` |
-| `helm` >= 3.12 tren may local | Tool deploy |
-| (optional) `metrics-server` | De `kubectl top nodes/pods` hoat dong — khong bat buoc cho stack nay vi Prometheus thu metric doc lap |
+| Requirement | Why |
+|-------------|-----|
+| EKS cluster `ecommerce-cluster` is running | Target for deployment |
+| `kubectl` points at the right context | Every apply depends on it |
+| **EBS CSI driver addon** (installed via Terraform in `02-cluster-eks`) | Required — K8s 1.31 deprecated the in-tree `kubernetes.io/aws-ebs` provisioner. Without CSI, the Prometheus / Loki / Grafana PVCs remain Pending forever |
+| StorageClass `gp3` as default, provisioner `ebs.csi.aws.com` | Values files reference `gp3` |
+| `helm` >= 3.12 locally | Deployment tool |
+| (optional) `metrics-server` | Makes `kubectl top nodes/pods` work — not required for the stack since Prometheus collects metrics independently |
 
-### Smoke check truoc khi deploy
+### Smoke check before deploying
 
 ```powershell
 kubectl get nodes                                                   # Ready
-kubectl get pods -n kube-system | Select-String "ebs-csi"           # Co controller + node daemonset
+kubectl get pods -n kube-system | Select-String "ebs-csi"           # Must have controller + node daemonset
 kubectl get storageclass                                            # gp3 (default), provisioner ebs.csi.aws.com
 ```
 
-Neu thieu CSI driver, cai qua Terraform tai module `02-cluster-eks/irsa-ebs-csi.tf` + `cluster_addons` trong `eks.tf`.
+If the CSI driver is missing, apply it via Terraform in `02-cluster-eks/irsa-ebs-csi.tf` + `cluster_addons` in `eks.tf`.
 
 ---
 
-## Trien khai
+## Deployment
 
-### Buoc 1 — StorageClass gp3 (neu chua co)
+### Step 1 — StorageClass gp3 (if not present)
 
 ```powershell
 cd infrastructure/06-monitoring
 kubectl apply -f storageclass-gp3.yaml
 
-# Bo flag default cua gp2 (neu dang la default)
+# Remove the default flag from gp2 (if it is currently default)
 kubectl patch storageclass gp2 -p '{\"metadata\": {\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"false\"}}}'
 
 kubectl get storageclass
-# → gp3 phai co "(default)", provisioner = ebs.csi.aws.com
+# → gp3 should show "(default)", provisioner = ebs.csi.aws.com
 ```
 
-### Buoc 2 — Namespace
+### Step 2 — Namespace
 
 ```powershell
 kubectl create namespace monitoring
 kubectl label namespace monitoring purpose=observability
 ```
 
-### Buoc 3 — Helm repos
+### Step 3 — Helm repos
 
 ```powershell
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -149,7 +147,7 @@ helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
 ```
 
-### Buoc 4 — Sinh password Grafana
+### Step 4 — Generate a Grafana password
 
 ```powershell
 # Windows PowerShell
@@ -157,9 +155,9 @@ $GRAFANA_PASSWORD = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 2
 Write-Host "Grafana admin password: $GRAFANA_PASSWORD"
 ```
 
-**Luu password vao password manager.** Khong commit vao Git.
+**Store this password in a password manager.** Never commit it to Git.
 
-### Buoc 5 — Cai kube-prometheus-stack
+### Step 5 — Install kube-prometheus-stack
 
 ```powershell
 helm install kps prometheus-community/kube-prometheus-stack `
@@ -172,11 +170,11 @@ helm install kps prometheus-community/kube-prometheus-stack `
 
 Verify:
 ```powershell
-kubectl -n monitoring get pods    # ~7 pod Running
-kubectl -n monitoring get pvc     # 3 PVC Bound, storageClass gp3
+kubectl -n monitoring get pods    # ~7 pods Running
+kubectl -n monitoring get pvc     # 3 PVCs Bound, storageClass gp3
 ```
 
-### Buoc 6 — Cai Loki + Promtail
+### Step 6 — Install Loki + Promtail
 
 ```powershell
 helm install loki grafana/loki `
@@ -199,32 +197,32 @@ kubectl -n monitoring run curl-test --rm -it --image=curlimages/curl --restart=N
 # → "ready"
 
 # Promtail DaemonSet
-kubectl -n monitoring get daemonset promtail    # DESIRED = READY = so node
+kubectl -n monitoring get daemonset promtail    # DESIRED = READY = number of nodes
 ```
 
-### Buoc 7 — Import dashboards
+### Step 7 — Import dashboards
 
 ```powershell
 cd dashboards
 .\apply-dashboards.ps1
 ```
 
-Script dung `kubectl apply --server-side` (bypass gioi han 256KB cua annotation `last-applied-configuration` cho cac dashboard lon).
+The script uses `kubectl apply --server-side` to bypass the 256KB annotation limit of client-side apply (the 1860 dashboard is close to that limit).
 
 Verify:
 ```powershell
 kubectl -n monitoring get configmap -l grafana_dashboard=1
-# → 4 ConfigMap
+# → 4 ConfigMaps
 
 kubectl -n monitoring logs deployment/kps-grafana -c grafana-sc-dashboard --tail=20 | Select-String "Writing"
-# → 4 dong "Writing /tmp/dashboards/Kubernetes/dashboard-*.json"
+# → 4 lines "Writing /tmp/dashboards/Kubernetes/dashboard-*.json"
 ```
 
 ---
 
-## Truy cap Grafana
+## Access Grafana
 
-### Port-forward (khuyen nghi cho dev)
+### Port-forward (recommended for dev)
 
 ```powershell
 kubectl -n monitoring port-forward svc/kps-grafana 3000:80
@@ -232,184 +230,115 @@ kubectl -n monitoring port-forward svc/kps-grafana 3000:80
 
 Browser: `http://localhost:3000`
 - Username: `admin`
-- Password: gia tri `$GRAFANA_PASSWORD` tu Buoc 4
+- Password: the `$GRAFANA_PASSWORD` value from Step 4
 
-### Lay lai password neu mat
+### Recover the password if lost
 
 ```powershell
 kubectl -n monitoring get secret kps-grafana -o jsonpath="{.data.admin-password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
 ```
 
-### Expose ra public (dem khi demo hoi dong)
+### Expose publicly (only during a demo)
 
-Doi `service.type: ClusterIP` -> `LoadBalancer` trong `values-kube-prometheus-stack.yaml`, roi:
+Change `service.type: ClusterIP` → `LoadBalancer` in `values-kube-prometheus-stack.yaml`, then:
 ```powershell
 helm upgrade kps prometheus-community/kube-prometheus-stack -n monitoring -f values-kube-prometheus-stack.yaml
 kubectl -n monitoring get svc kps-grafana    # EXTERNAL-IP = ELB hostname
 ```
 
-**Nho revert ve ClusterIP sau khi demo** de tiet kiem $18/thang ELB.
+**Remember to revert to `ClusterIP` after the demo** to avoid the $18/month ELB charge.
 
 ---
 
 ## Dashboards
 
-4 dashboard duoc import tu Grafana.com community:
+4 dashboards are imported from the Grafana.com community:
 
-| ID | Ten | Tac dung |
-|----|-----|----------|
+| ID | Name | Purpose |
+|----|------|---------|
 | **1860** | Node Exporter Full | System metrics per node (CPU/RAM/Disk/Network) |
 | **315** | Kubernetes Cluster Monitoring | Pod count, namespace resource usage |
-| **13639** | Logs / App (Loki) | Log viewer realtime theo namespace/pod |
+| **13639** | Logs / App (Loki) | Real-time log viewer by namespace/pod |
 | **15760** | Kubernetes Views / Pods | Pod drill-down (CPU/RAM/restarts per pod) |
 
-Dashboard duoc dong goi qua ConfigMap + Grafana sidecar pattern:
-- Moi dashboard = 1 ConfigMap
-- Label `grafana_dashboard=1` -> sidecar detect
-- Annotation `grafana_folder=Kubernetes` -> gom vao folder
+Dashboards are packaged via the **ConfigMap + Grafana sidecar** pattern:
+- Each dashboard = one ConfigMap
+- Label `grafana_dashboard=1` → detected by the sidecar
+- Annotation `grafana_folder=Kubernetes` → grouped into one folder
 
-Them dashboard moi: tai JSON tu https://grafana.com/grafana/dashboards/ -> `dashboards/ten-file.json` -> chay lai `apply-dashboards.ps1`.
+To add a new dashboard: download JSON from https://grafana.com/grafana/dashboards/ → `dashboards/<name>.json` → re-run `apply-dashboards.ps1`.
 
 ---
 
-## Cac query mau
+## Sample Queries
 
-### Prometheus (Explore -> Prometheus)
+### Prometheus (Explore → Prometheus)
 
 ```promql
-# Top 5 namespace dung nhieu RAM
+# Top 5 namespaces by RAM usage
 topk(5, sum by (namespace) (container_memory_working_set_bytes))
 
-# CPU usage cua UI container
+# CPU usage of the UI container
 rate(container_cpu_usage_seconds_total{namespace="retail-store", pod=~"ui-.*"}[5m])
 
-# Pod restart nhieu nhat 24h qua
+# Pods with the most restarts over the last 24h
 topk(10, increase(kube_pod_container_status_restarts_total[24h]))
 
-# Node nao sap het disk (<10%)
+# Nodes running low on disk (<10%)
 100 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100) > 90
 
 # EKS API server request rate per verb
 sum(rate(apiserver_request_total[5m])) by (verb)
 ```
 
-### Loki (Explore -> Loki)
+### Loki (Explore → Loki)
 
 ```logql
-# Log cua namespace app
+# Logs from the app namespace
 {namespace="retail-store"}
 
-# Log cua 1 pod cu the
+# Logs from a specific pod
 {namespace="retail-store", pod="ui-abc-xyz"}
 
-# Tim error trong namespace monitoring
+# Errors inside the monitoring namespace
 {namespace="monitoring"} |= "error"
 
-# Dem so error/phut theo pod
+# Error count per minute per pod
 sum by (pod) (count_over_time({namespace="retail-store"} |= "ERROR" [5m]))
 
-# Log ArgoCD sync (debug GitOps)
+# ArgoCD sync logs (GitOps debugging)
 {namespace="argocd"} |= "sync"
 ```
 
 ---
 
-## Known issues
+## Teardown (Cleanup After Each Lab)
 
-### 1. `serviceMonitor.enabled=false` cho Promtail
+Running the monitoring stack continuously costs ~$4/month (EBS volumes) plus compute overhead on the cluster. If you are pausing the lab, uninstall the stack to release EBS volumes.
 
-**Van de:** Chart `grafana/promtail` v6.16.0 render sai template `service-metrics.yaml` khi `serviceMonitor.enabled=true`, ket qua YAML malformed, install fail.
-
-**Workaround hien tai:** Tat `serviceMonitor.enabled: false` trong `values-promtail.yaml`.
-
-**He qua:** Prometheus khong scrape metrics cua chinh Promtail (log-shipped rate, errors). Log pipeline van hoat dong binh thuong.
-
-**Fix cho tuong lai:** Tao ServiceMonitor tay qua manifest rieng:
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: promtail
-  namespace: monitoring
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: promtail
-  endpoints:
-    - port: http-metrics
-```
-
-Hoac chuyen sang chart moi hon (v6.17+) khi bug duoc fix upstream.
-
-### 2. Import dashboard lon fail voi `apply` mac dinh
-
-**Van de:** Dashboard `node-exporter-full` (~250KB) vuot gioi han 262144 bytes cua annotation `kubectl.kubernetes.io/last-applied-configuration`.
-
-**Fix:** Script `apply-dashboards.ps1` da dung `kubectl apply --server-side=true --force-conflicts` — server-side apply khong luu annotation do.
-
-### 3. EKS control plane metrics "DOWN"
-
-**Van de:** Prometheus UI (`localhost:9090/targets`) hien `kubeControllerManager`, `kubeScheduler`, `kubeProxy`, `kubeEtcd` la DOWN.
-
-**Ly do:** EKS managed control plane — khong expose port scrape cho external.
-
-**Fix:** Da tat trong `values-kube-prometheus-stack.yaml`:
-```yaml
-kubeEtcd: { enabled: false }
-kubeControllerManager: { enabled: false }
-kubeScheduler: { enabled: false }
-kubeProxy: { enabled: false }
-```
-
-### 4. `kubectl top` khong hoat dong (neu khong cai metrics-server)
-
-**Ly do:** `kubectl top` dung API `metrics.k8s.io`, phai co `metrics-server` deployment trong `kube-system`. Prometheus KHAC voi `metrics-server`.
-
-**Fix:**
-```powershell
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
----
-
-## Teardown
-
-### Chi go monitoring (giu cluster)
+### Uninstall monitoring only (keep the cluster)
 
 ```powershell
 helm uninstall promtail -n monitoring
 helm uninstall loki -n monitoring
 helm uninstall kps -n monitoring
 
-# Xoa PVC (helm khong tu xoa)
+# Delete PVCs (helm does not remove them)
 kubectl -n monitoring delete pvc --all
 
-# Xoa namespace (bao gom ConfigMap dashboards)
+# Delete the namespace (includes dashboard ConfigMaps)
 kubectl delete namespace monitoring
 
-# (Optional) Xoa CRDs cua Prometheus Operator — chi lam khi khong con app nao dung ServiceMonitor/PrometheusRule
+# (Optional) Delete Prometheus Operator CRDs — only if no app still depends on ServiceMonitor / PrometheusRule
 kubectl get crd -o name | Select-String "monitoring.coreos.com" | ForEach-Object { kubectl delete $_ }
 ```
 
-### Destroy toan cluster
+### Destroy the whole cluster
 
-Khi chay `terraform destroy` module `02-cluster-eks`, toan bo namespace `monitoring` se bi xoa cung cluster. **Khong can uninstall helm release truoc.**
+When you run `terraform destroy` on `02-cluster-eks`, the entire `monitoring` namespace is deleted together with the cluster. **You do not need to uninstall the helm releases first.**
 
-Tuy nhien PVC co kem EBS volume — EKS managed cleanup se xoa khi xoa cluster. Kiem tra AWS Console > EC2 > Volumes sau teardown, neu co volume mo coi (status `available`, khong attached), xoa tay de tranh tinh phi.
-
----
-
-## Lessons learned
-
-1. **EBS CSI driver la MUST-HAVE tu K8s 1.23+** — in-tree provisioner bi deprecate, plugin CSI la default moi.
-2. **Server-side apply** giai quyet gioi han 256KB cua client-side apply — nho khi xu ly file JSON lon.
-3. **Version pin** (`--version X.Y.Z`) bat buoc cho moi helm install de reproducible.
-4. **Password qua `--set`** thay vi commit — nguyen tac "secrets out-of-band".
-5. **ConfigMap + sidecar pattern** cho dashboards — GitOps-ready, dashboard la code.
-6. **One namespace per concern** — `monitoring` isolation voi app, de delete clean.
-7. **Resource requests/limits explicit** cho tung component — khong de mac dinh tranh contention.
-8. **Verify tung buoc** — khong install xong moi check tat ca, debug som re hon.
+However, PVCs are backed by EBS volumes — EKS-managed cleanup should remove them along with the cluster. After teardown, check **AWS Console > EC2 > Volumes** and delete any orphaned volumes (status `available`, not attached) to avoid storage charges.
 
 ---
 
-> Chi tiet trien khai tung buoc, xem muc [Phase 3 — Monitoring](../README.md#phase-3--trien-khai-monitoring) trong README chinh cua infrastructure.
+> Step-by-step deployment details are covered in [Phase 3 — Monitoring Deployment](../README.md#phase-3--monitoring-deployment) in the main infrastructure README.

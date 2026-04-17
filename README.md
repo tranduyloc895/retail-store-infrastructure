@@ -1,36 +1,34 @@
 # DevSecOps E-commerce Infrastructure
 
-Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terraform** de provisioning ha tang AWS, **Ansible** de configuration management, **Jenkins** lam CI pipeline (build + push image), va **ArgoCD** lam CD pipeline (GitOps, pull-based deploy).
+Infrastructure as Code (IaC) for the DevSecOps E-commerce project. **Terraform** provisions AWS infrastructure, **Ansible** handles configuration management, **Jenkins** runs CI (build + push image), and **ArgoCD** runs CD (GitOps, pull-based deploy).
 
-## Muc luc
+## Table of Contents
 
-- [Kien truc tong quan](#kien-truc-tong-quan)
-- [Luong CI/CD theo mo hinh GitOps](#luong-cicd-theo-mo-hinh-gitops)
-- [Yeu cau he thong](#yeu-cau-he-thong)
-- [Cau truc thu muc](#cau-truc-thu-muc)
-- [Chi tiet tung module](#chi-tiet-tung-module)
+- [Overall Architecture](#overall-architecture)
+- [CI/CD Flow with GitOps](#cicd-flow-with-gitops)
+- [System Requirements](#system-requirements)
+- [Directory Structure](#directory-structure)
+- [Module Details](#module-details)
   - [01-network: VPC & Networking](#01-network-vpc--networking)
   - [02-cluster-eks: Kubernetes Cluster & ArgoCD](#02-cluster-eks-kubernetes-cluster--argocd)
   - [03-jenkins-server: Jenkins Master & Agent](#03-jenkins-server-jenkins-master--agent)
   - [04-ansible-config: Configuration Management](#04-ansible-config-configuration-management)
   - [05-ecr: Elastic Container Registry](#05-ecr-elastic-container-registry)
   - [06-monitoring: Observability Stack](#06-monitoring-observability-stack)
-- [Thu tu trien khai](#thu-tu-trien-khai)
-- [Huong dan trien khai chi tiet](#huong-dan-trien-khai-chi-tiet)
-- [Cau hinh Jenkins UI](#cau-hinh-jenkins-ui)
-- [Cai ArgoCD Application](#cai-argocd-application)
-- [Chay Pipeline CI/CD](#chay-pipeline-cicd)
-- [Phase 3 — Trien khai Monitoring](#phase-3--trien-khai-monitoring)
-- [Thu hep quyen Jenkins Agent (da thuc hien)](#thu-hep-quyen-jenkins-agent-da-thuc-hien)
-- [Quan ly Terraform State](#quan-ly-terraform-state)
-- [Bao mat](#bao-mat)
-- [So do mang](#so-do-mang)
+- [Deployment Order](#deployment-order)
+- [Detailed Deployment Guide](#detailed-deployment-guide)
+- [Jenkins UI Configuration](#jenkins-ui-configuration)
+- [Install ArgoCD Applications](#install-argocd-applications)
+- [Run the CI/CD Pipeline](#run-the-cicd-pipeline)
+- [Phase 3 — Monitoring Deployment](#phase-3--monitoring-deployment)
+- [Terraform State Management](#terraform-state-management)
+- [Security](#security)
 - [Tagging Convention](#tagging-convention)
-- [Teardown](#teardown-huy-ha-tang)
+- [Teardown (Cleanup After Each Lab)](#teardown-cleanup-after-each-lab)
 
 ---
 
-## Kien truc tong quan
+## Overall Architecture
 
 ```
                         ┌──────────────────────────────────────────────────────────┐
@@ -42,25 +40,25 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
                         │  │              (ecommerce-vpc)                       │  │
                         │  │                                                    │  │
                         │  │  ┌──────────────────┐  ┌──────────────────┐       │  │
-                        │  │  │  Public Subnet    │  │  Public Subnet   │       │  │
-                        │  │  │  10.0.101.0/24    │  │  10.0.102.0/24   │       │  │
-                        │  │  │  (AZ: 1a)         │  │  (AZ: 1b)        │       │  │
-                        │  │  └────────┬──────────┘  └──────────────────┘       │  │
+                        │  │  │  Public Subnet   │  │  Public Subnet   │       │  │
+                        │  │  │  10.0.101.0/24   │  │  10.0.102.0/24   │       │  │
+                        │  │  │  (AZ: 1a)        │  │  (AZ: 1b)        │       │  │
+                        │  │  └────────┬─────────┘  └──────────────────┘       │  │
                         │  │           │  NAT Gateway                           │  │
-                        │  │  ┌────────▼──────────┐  ┌──────────────────┐       │  │
-                        │  │  │  Private Subnet   │  │  Private Subnet  │       │  │
-                        │  │  │  10.0.1.0/24      │  │  10.0.2.0/24     │       │  │
-                        │  │  │  (AZ: 1a)         │  │  (AZ: 1b)        │       │  │
-                        │  │  │                   │  │                  │       │  │
-                        │  │  │  ┌──────────────┐ │  │ ┌─────────────┐ │       │  │
-                        │  │  │  │Jenkins Master│ │  │ │ EKS Nodes   │ │       │  │
-                        │  │  │  │ (t3.medium)  │ │  │ │ (t3.large)  │ │       │  │
-                        │  │  │  └──────────────┘ │  │ │ x2-3 nodes  │ │       │  │
-                        │  │  │  ┌──────────────┐ │  │ └─────────────┘ │       │  │
-                        │  │  │  │Jenkins Agent │ │  │                  │       │  │
-                        │  │  │  │ (t3.medium)  │ │  │                  │       │  │
-                        │  │  │  └──────────────┘ │  │                  │       │  │
-                        │  │  └───────────────────┘  └──────────────────┘       │  │
+                        │  │  ┌────────▼─────────┐  ┌──────────────────┐       │  │
+                        │  │  │  Private Subnet  │  │  Private Subnet  │       │  │
+                        │  │  │  10.0.1.0/24     │  │  10.0.2.0/24     │       │  │
+                        │  │  │  (AZ: 1a)        │  │  (AZ: 1b)        │       │  │
+                        │  │  │                  │  │                  │       │  │
+                        │  │  │ ┌──────────────┐ │  │ ┌─────────────┐  │       │  │
+                        │  │  │ │Jenkins Master│ │  │ │ EKS Nodes   │  │       │  │
+                        │  │  │ │ (t3.medium)  │ │  │ │ (t3.large)  │  │       │  │
+                        │  │  │ └──────────────┘ │  │ │ x2-3 nodes  │  │       │  │
+                        │  │  │ ┌──────────────┐ │  │ └─────────────┘  │       │  │
+                        │  │  │ │Jenkins Agent │ │  │                  │       │  │
+                        │  │  │ │ (t3.medium)  │ │  │                  │       │  │
+                        │  │  │ └──────────────┘ │  │                  │       │  │
+                        │  │  └──────────────────┘  └──────────────────┘       │  │
                         │  │                                                    │  │
                         │  │  ┌──────────────────────────────────────────────┐  │  │
                         │  │  │  EKS Cluster: ecommerce-cluster              │  │  │
@@ -68,7 +66,7 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
                         │  │  └──────────────────────────────────────────────┘  │  │
                         │  │                                                    │  │
                         │  │  ┌──────────────────────────────────────────────┐  │  │
-                        │  │  │  ECR: retail-store/{ui,catalog,cart,...}      │  │  │
+                        │  │  │  ECR: retail-store/{ui,catalog,cart,...}     │  │  │
                         │  │  └──────────────────────────────────────────────┘  │  │
                         │  └────────────────────────────────────────────────────┘  │
                         └──────────────────────────────────────────────────────────┘
@@ -76,14 +74,14 @@ Infrastructure as Code (IaC) cho dự an DevSecOps E-commerce, su dung **Terrafo
 
 ---
 
-## Luong CI/CD theo mo hinh GitOps
+## CI/CD Flow with GitOps
 
-Du an ap dung **GitOps pull-based** thay vi push-based truyen thong:
-- **Jenkins** chi chiu trach nhiem CI: build image + push ECR + cap nhat manifest.
-- **ArgoCD** (chay trong cluster) chiu trach nhiem CD: poll Git repo va tu apply thay doi vao cluster.
+The project uses **pull-based GitOps** instead of the traditional push-based model:
+- **Jenkins** is responsible for CI only: build image + push to ECR + update manifest.
+- **ArgoCD** (running inside the cluster) is responsible for CD: poll the Git repo and apply changes to the cluster.
 
 ```
-Developer push code (retail-store-microservices)
+Developer pushes code (retail-store-microservices)
         │
         ▼
 Jenkins Master ──trigger──► Jenkins Agent
@@ -105,42 +103,42 @@ Jenkins Master ──trigger──► Jenkins Agent
                                      (retail-store ns)
                                             │
                                             ▼
-                                     Rolling update pods
+                                     Rolling pod update
 ```
 
-**Diem quan trong:**
-- Jenkins Agent **khong co quyen kubectl vao cluster** (xem muc [Thu hep quyen Jenkins Agent](#thu-hep-quyen-jenkins-agent-da-thuc-hien))
-- Image tag = 7 ky tu dau cua Git commit SHA -> truy vet 1-1 giua code / image / deployment
-- Rollback chi can `git revert` trong repo gitops, khong phai rebuild image
+**Key design decisions:**
+- Jenkins Agent has **no kubectl access to the cluster** (least-privilege CI).
+- Image tag = the first 7 chars of the Git commit SHA → 1-to-1 traceability between code / image / deployment.
+- Rollback only needs `git revert` in the gitops repo — no image rebuild required.
 
-**3 repo trong he sinh thai:**
+**Three repos in the ecosystem:**
 
-| Repo | Vai tro |
-|------|---------|
-| `infrastructure` (this repo) | Terraform + Ansible: VPC, EKS, Jenkins, ECR, ArgoCD |
-| `retail-store-microservices` | Source code 5 services + Jenkinsfile |
-| `retail-store-gitops` | K8s manifests + ArgoCD Application (source of truth cho cluster) |
+| Repo | Role |
+|------|------|
+| `infrastructure` (this repo) | Terraform + Ansible: VPC, EKS, Jenkins, ECR |
+| `retail-store-microservices` | Source code for 5 services + Jenkinsfile |
+| `retail-store-gitops` | K8s manifests + ArgoCD Applications (source of truth for the cluster) |
 
 ---
 
-## Yeu cau he thong
+## System Requirements
 
-| Tool | Phien ban toi thieu | Muc dich |
-|------|---------------------|----------|
+| Tool | Minimum version | Purpose |
+|------|-----------------|---------|
 | [Terraform](https://www.terraform.io/) | >= 1.5.0 | Infrastructure provisioning |
-| [AWS CLI](https://aws.amazon.com/cli/) | v2 | Tuong tac voi AWS API |
+| [AWS CLI](https://aws.amazon.com/cli/) | v2 | Interact with the AWS API |
 | [Ansible](https://www.ansible.com/) | >= 2.14 | Configuration management |
-| [AWS Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | Latest | SSH tunnel qua SSM |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | >= 1.31 | Quan ly Kubernetes cluster |
-| [Helm](https://helm.sh/) | >= 3.0 | Package manager cho Kubernetes |
+| [AWS Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | Latest | SSH tunnel via SSM |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | >= 1.31 | Manage the Kubernetes cluster |
+| [Helm](https://helm.sh/) | >= 3.0 | Kubernetes package manager |
 
-**AWS Credentials:** Dam bao da cau hinh AWS credentials (`aws configure`) voi quyen du de tao VPC, EKS, EC2, ECR, IAM, S3.
+**AWS Credentials:** Make sure AWS credentials are configured (`aws configure`) with sufficient permissions to create VPC, EKS, EC2, ECR, IAM, and S3 resources.
 
-**GitHub account:** Can quyen tao Fine-grained Personal Access Token cho repo `retail-store-gitops`.
+**GitHub account:** Required to create a Fine-grained Personal Access Token for the `retail-store-gitops` repo.
 
 ---
 
-## Cau truc thu muc
+## Directory Structure
 
 ```
 infrastructure/
@@ -155,56 +153,51 @@ infrastructure/
 │
 ├── 02-cluster-eks/                       # Layer 2: Kubernetes + GitOps controller
 │   ├── provider.tf                       #   AWS + Kubernetes + Helm providers
-│   ├── data.tf                           #   Lookup VPC, subnets, Jenkins Agent role/SG
+│   ├── data.tf                           #   Lookup VPC, subnets
 │   ├── eks.tf                            #   EKS cluster + node groups + access entries
 │   ├── argocd.tf                         #   ArgoCD Helm release
-│   ├── variables.tf                      #   Input variables
-│   └── outputs.tf                        #   Cluster name, endpoint, SG IDs
+│   ├── irsa-ebs-csi.tf                   #   IRSA role for EBS CSI driver
+│   ├── variables.tf
+│   └── outputs.tf
 │
 ├── 03-jenkins-server/                    # Layer 3: CI Server
-│   ├── provider.tf                       #   AWS + TLS + Local providers
-│   ├── data.tf                           #   Lookup VPC, subnets, AMI
+│   ├── provider.tf
+│   ├── data.tf
 │   ├── ec2.tf                            #   Jenkins Master EC2 + SSH key generation
 │   ├── security.tf                       #   Master IAM role, instance profile, SG
 │   ├── agent.tf                          #   Jenkins Agent EC2 instance
-│   ├── agent-security.tf                 #   Agent IAM role (SSM+ECR+EKS), SG
-│   ├── variables.tf                      #   Input variables (master + agent)
-│   ├── outputs.tf                        #   IPs, instance IDs, SG IDs, IAM ARNs
-│   └── connect-jenkins.ps1               #   PowerShell script mo SSM tunnel
+│   ├── agent-security.tf                 #   Agent IAM role (SSM + ECR), SG
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── connect-jenkins.ps1               #   PowerShell script to open the SSM tunnel
 │
 ├── 04-ansible-config/                    # Layer 4: Configuration Management
 │   ├── ansible.cfg                       #   Ansible config (SSM ProxyCommand)
 │   ├── site.yaml                         #   Master playbook (2 plays: master + agent)
-│   ├── inventories/
-│   │   └── dev/
-│   │       └── hosts.ini                 #   Target hosts (EC2 instance IDs)
+│   ├── inventories/dev/hosts.ini         #   Target hosts (EC2 instance IDs)
 │   └── roles/
-│       ├── common/tasks/main.yaml        #   APT cache update
-│       ├── java/tasks/main.yaml          #   OpenJDK 17
-│       ├── docker/tasks/main.yaml        #   Docker Engine + user groups
-│       ├── jenkins/tasks/main.yaml       #   Jenkins install + password fetch
-│       ├── awscli/tasks/main.yaml        #   AWS CLI v2
-│       ├── kubectl/                      #   kubectl binary
-│       │   ├── tasks/main.yaml
-│       │   └── defaults/main.yaml        #     Version: 1.31.0
+│       ├── common/                       #   APT cache update
+│       ├── java/                         #   OpenJDK 17
+│       ├── docker/                       #   Docker Engine + user groups
+│       ├── jenkins/                      #   Jenkins install + password fetch
+│       ├── awscli/                       #   AWS CLI v2
+│       ├── kubectl/                      #   kubectl binary (kept for reuse)
 │       └── jenkins-agent/                #   Agent user + SSH authorized_keys
-│           ├── tasks/main.yaml
-│           └── defaults/main.yaml
 │
 ├── 05-ecr/                               # Layer 5: Container Registry
-│   ├── provider.tf                       #   AWS provider + S3 backend
+│   ├── provider.tf
 │   ├── ecr.tf                            #   5 ECR repos + lifecycle policies
-│   ├── variables.tf                      #   Input variables
-│   └── outputs.tf                        #   Repository URLs, registry ID
+│   ├── variables.tf
+│   └── outputs.tf
 │
 └── 06-monitoring/                        # Layer 6: Observability (Helm imperative)
-    ├── README.md                         #   Huong dan rieng cho module
+    ├── README.md                         #   Dedicated module guide
     ├── storageclass-gp3.yaml             #   Default StorageClass (CSI-backed)
     ├── values-kube-prometheus-stack.yaml #   Prometheus + Grafana + Alertmanager config
     ├── values-loki.yaml                  #   Loki SingleBinary mode
     ├── values-promtail.yaml              #   Promtail DaemonSet (log shipper)
     └── dashboards/
-        ├── apply-dashboards.ps1          #   Dong goi JSON -> ConfigMap (server-side apply)
+        ├── apply-dashboards.ps1          #   Packages JSON → ConfigMap (server-side apply)
         ├── node-exporter-full.json       #   Dashboard 1860
         ├── k8s-cluster-monitoring.json   #   Dashboard 315
         ├── logs-app-loki.json            #   Dashboard 13639
@@ -213,26 +206,26 @@ infrastructure/
 
 ---
 
-## Chi tiet tung module
+## Module Details
 
 ### 01-network: VPC & Networking
 
-**Muc dich:** Tao nen tang mang cho toan bo ha tang.
+**Purpose:** Build the network foundation for the entire infrastructure.
 
-**Module su dung:** [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) v5.5.0
+**Module used:** [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) v5.5.0
 
-| Resource | Gia tri |
-|----------|---------|
+| Resource | Value |
+|----------|-------|
 | VPC Name | `ecommerce-vpc` |
 | CIDR | `10.0.0.0/16` (65,536 IPs) |
 | Region | `ap-southeast-1` (Singapore) |
 | Availability Zones | `ap-southeast-1a`, `ap-southeast-1b` |
 | Private Subnets | `10.0.1.0/24`, `10.0.2.0/24` |
 | Public Subnets | `10.0.101.0/24`, `10.0.102.0/24` |
-| NAT Gateway | Single (tiet kiem chi phi cho Dev) |
+| NAT Gateway | Single (cost-saving for Dev) |
 | DNS | Hostnames + Support enabled |
 
-**Subnet Tags cho EKS:**
+**Subnet Tags for EKS:**
 - Public subnets: `kubernetes.io/role/elb = 1` (external load balancer)
 - Private subnets: `kubernetes.io/role/internal-elb = 1` (internal load balancer)
 
@@ -240,27 +233,27 @@ infrastructure/
 
 ### 02-cluster-eks: Kubernetes Cluster & ArgoCD
 
-**Muc dich:** Trien khai EKS cluster lam runtime, cai ArgoCD lam GitOps controller.
+**Purpose:** Deploy the EKS cluster as the runtime and install ArgoCD as the GitOps controller.
 
-**Module su dung:** [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) v20+
+**Module used:** [`terraform-aws-modules/eks/aws`](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) v20+
 
 #### EKS Cluster
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | Cluster Name | `ecommerce-cluster` |
 | Kubernetes Version | `1.31` |
 | Endpoint | Public + Private access |
 | Logging | API, Audit, Authenticator |
-| Encryption | KMS cho Kubernetes secrets |
-| Admin | Cluster creator co admin permissions |
+| Encryption | KMS for Kubernetes secrets |
+| Admin | Cluster creator is granted admin permissions |
 
-> **Luu y ve version:** EKS chi cho phep upgrade 1 minor version moi lan (1.29 -> 1.30 -> 1.31). Chon version con **standard support toi thieu 12 thang** khi tao cluster moi. Kiem tra tai [EKS Kubernetes release calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
+> **Version note:** EKS only allows upgrades one minor version at a time (1.29 → 1.30 → 1.31). Pick a version with **at least 12 months of standard support** when creating a new cluster. See the [EKS Kubernetes release calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
 
 #### Node Group: `main_nodes`
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | Instance Type | `t3.large` (2 vCPU, 8GB RAM) |
 | Capacity Type | `ON_DEMAND` |
 | Scaling | Min 2, Max 3, Desired 2 |
@@ -268,57 +261,49 @@ infrastructure/
 
 #### Cluster Addons (EKS managed)
 
-| Addon | Phien ban | Muc dich |
-|-------|-----------|----------|
-| `aws-ebs-csi-driver` | `most_recent` | Dynamic PVC provisioning cho stateful workload. **Bat buoc** tu K8s 1.23+ vi plugin in-tree `kubernetes.io/aws-ebs` da deprecated. |
+| Addon | Version | Purpose |
+|-------|---------|---------|
+| `aws-ebs-csi-driver` | `most_recent` | Dynamic PVC provisioning for stateful workloads. **Required** since K8s 1.23+ because the in-tree `kubernetes.io/aws-ebs` plugin is deprecated. |
 
-IAM permission cho EBS CSI cap qua **IRSA (IAM Role for Service Account)** — file `irsa-ebs-csi.tf`:
+IAM permission for EBS CSI is granted via **IRSA (IAM Role for Service Account)** — file `irsa-ebs-csi.tf`:
 - Module: `terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks`
 - Role name: `${cluster_name}-ebs-csi-driver`
-- Policy attach: `AmazonEBSCSIDriverPolicy` (managed by AWS)
+- Policy attached: `AmazonEBSCSIDriverPolicy` (AWS-managed)
 - Service account: `kube-system:ebs-csi-controller-sa`
 
-> **Tai sao IRSA thay vi cap quyen cho node role?** Nguyen tac least-privilege: chi pod controller CSI duoc assume role nay, khong phai toan bo workload chay tren node.
+> **Why IRSA instead of granting permissions to the node role?** Least-privilege principle: only the CSI controller pod can assume this role, not every workload running on the node.
 
-**Hau qua o layer sau:** Module `06-monitoring` tao StorageClass `gp3` voi provisioner `ebs.csi.aws.com` — PVC cua Prometheus/Loki/Grafana tu dong binding.
+**Downstream effect:** The `06-monitoring` module creates a `gp3` StorageClass with provisioner `ebs.csi.aws.com` — PVCs for Prometheus / Loki / Grafana bind automatically.
 
 #### ArgoCD (GitOps Controller)
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | Helm Chart | `argo-cd` v5.51.4 |
-| Namespace | `argocd` (tu tao) |
-| Vai tro | Pull manifests tu `retail-store-gitops` repo va apply vao cluster |
-| Sync policy | Auto (prune + selfHeal) — cau hinh trong file `argocd/*.yml` cua gitops repo |
-| Poll interval | 3 phut (mac dinh), co the rut ngan qua webhook |
+| Namespace | `argocd` (auto-created) |
+| Role | Pull manifests from the `retail-store-gitops` repo and apply to the cluster |
+| Sync policy | Auto (prune + selfHeal) — configured in `argocd/*.yml` of the gitops repo |
+| Poll interval | 3 minutes (default); can be reduced via webhook |
 
-ArgoCD duoc cai ngay trong layer nay vi no la thanh phan bat buoc cua cluster — neu khong co ArgoCD, khong co gi apply manifest tu Git vao cluster.
+ArgoCD is installed in this layer because it is a mandatory cluster component — without ArgoCD, nothing applies manifests from Git to the cluster.
 
 #### EKS Access Entries
 
-Chi co `enable_cluster_creator_admin_permissions = true` — nguoi tao cluster (IAM user/role chay Terraform) co admin access.
+Only `enable_cluster_creator_admin_permissions = true` — the cluster creator (IAM user/role running Terraform) has admin access. The Jenkins Agent has **no access entry** into the cluster (GitOps removes this need).
 
-> **Lich su:** Truoc khi chuyen sang GitOps, Jenkins Agent IAM role duoc cap `AmazonEKSClusterAdminPolicy` qua `access_entries`. Sau khi ArgoCD dam nhan viec apply manifest, access entry nay **da bi loai bo** (xem muc [Thu hep quyen Jenkins Agent](#thu-hep-quyen-jenkins-agent-da-thuc-hien)).
-
-#### Security Group Rule
-
-Khong co SG rule tu Jenkins Agent SG vao EKS cluster SG.
-
-> **Lich su:** Truoc day co rule cho phep Jenkins Agent truy cap EKS API endpoint (port 443). Rule nay **da bi loai bo** sau khi chuyen sang GitOps — Jenkins Agent khong can goi Kubernetes API nua.
-
-**Data Sources:** Module nay chi lookup VPC va private subnets tu module `01-network` thong qua tags. **Khong con cross-module dependency** voi `03-jenkins-server` — giup viec destroy/recreate don gian hon truoc day.
+**Data sources:** This module only looks up the VPC and private subnets from `01-network` via tags. **No cross-module dependency** on `03-jenkins-server`, which simplifies destroy/recreate.
 
 ---
 
 ### 03-jenkins-server: Jenkins Master & Agent
 
-**Muc dich:** Provision 2 EC2 instance trong private subnet — 1 Master (dieu phoi pipeline) va 1 Agent (thuc thi build + push + update GitOps repo).
+**Purpose:** Provision 2 EC2 instances in private subnets — 1 Master (pipeline orchestrator) and 1 Agent (build + push + update GitOps repo).
 
 #### Jenkins Master
 
-| Config | Gia tri |
-|--------|---------|
-| AMI | Ubuntu 22.04 LTS (tu dong lay ban moi nhat) |
+| Config | Value |
+|--------|-------|
+| AMI | Ubuntu 22.04 LTS (auto-lookup latest) |
 | Instance Type | `t3.medium` (2 vCPU, 4GB RAM) |
 | Subnet | Private subnet |
 | Root Volume | 50 GB gp3 |
@@ -329,55 +314,56 @@ Khong co SG rule tu Jenkins Agent SG vao EKS cluster SG.
 
 **Security Group:** `jenkins-sg`
 
-| Rule | Port | Source | Mo ta |
-|------|------|--------|-------|
+| Rule | Port | Source | Description |
+|------|------|--------|-------------|
 | Ingress | 8080/TCP | VPC CIDR | Jenkins UI |
 | Egress | All | 0.0.0.0/0 | Outbound traffic |
 
-> **Khong mo port 22.** Truy cap SSH qua AWS SSM Session Manager.
+> **Port 22 is NOT open.** SSH access goes through AWS SSM Session Manager.
 
 #### Jenkins Agent
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | AMI | Ubuntu 22.04 LTS |
 | Instance Type | `t3.medium` |
-| Subnet | Private subnet (cung VPC voi Master) |
+| Subnet | Private subnet (same VPC as Master) |
 | Root Volume | 50 GB gp3 |
 | Name Tag | `Jenkins-Agent` |
 
-**IAM Role:** `jenkins-agent-role` — sau khi thu hep theo nguyen tac least-privilege:
+**IAM Role:** `jenkins-agent-role` (least-privilege):
 
-| Policy | Muc dich | Trang thai |
-|--------|----------|-----------|
-| `AmazonSSMManagedInstanceCore` | Ansible provision qua SSM | Hien co |
-| ECR policy (inline) | `GetAuthorizationToken`, `PutImage`, ... — chi cho `retail-store/*` | Hien co |
-| ~~EKS policy (inline)~~ | ~~`DescribeCluster`, `ListClusters`, `sts:GetCallerIdentity`~~ | **Da loai bo** (post-GitOps) |
+| Policy | Purpose |
+|--------|---------|
+| `AmazonSSMManagedInstanceCore` | Ansible provisioning via SSM |
+| ECR policy (inline) | `GetAuthorizationToken`, `PutImage`, ... — scoped to `retail-store/*` only |
+
+No EKS permissions — the Agent never calls the Kubernetes API (GitOps handles that).
 
 **Security Group:** `jenkins-agent-sg`
 
-| Rule | Port | Source | Mo ta |
-|------|------|--------|-------|
+| Rule | Port | Source | Description |
+|------|------|--------|-------------|
 | Ingress | 22/TCP | `jenkins-sg` (Master SG) | SSH agent connection |
 | Egress | All | 0.0.0.0/0 | Outbound traffic (ECR, GitHub) |
 
-#### SSH Key (dung chung Master + Agent)
+#### SSH Key (shared Master + Agent)
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | Algorithm | RSA 4096-bit |
 | Key Name | `jenkins-ansible-key` |
 | Local Files | `jenkins-ansible-key.pem` (private) + `jenkins-ansible-key.pub` (public) |
 
-Private key dung cho Ansible va Jenkins Master SSH vao Agent. Public key duoc copy vao Agent authorized_keys.
+The private key is used by Ansible and by the Jenkins Master to SSH into the Agent. The public key is copied into the Agent's `authorized_keys`.
 
 ---
 
 ### 04-ansible-config: Configuration Management
 
-**Muc dich:** Tu dong cai dat va cau hinh Jenkins Master + Agent.
+**Purpose:** Automate installation and configuration for the Jenkins Master + Agent.
 
-#### Ket noi SSH qua SSM
+#### SSH over SSM
 
 ```ini
 [ssh_connection]
@@ -385,47 +371,47 @@ ssh_args = -o ProxyCommand="sh -c \"aws ssm start-session --target %h
     --document-name AWS-StartSSHSession --parameters 'portNumber=%p'\""
 ```
 
-Ket noi SSH tunnel qua AWS Systems Manager, khong can mo port 22.
+An SSH tunnel through AWS Systems Manager — no need to expose port 22.
 
 #### Inventory
 
-Host duoc xac dinh bang **EC2 Instance ID** (khong phai IP), vi SSM dung instance ID. File `inventories/dev/hosts.ini` can duoc cap nhat Instance ID thuc te sau moi lan chay Terraform.
+Hosts are identified by their **EC2 Instance ID** (not IP), because SSM uses instance IDs. Update `inventories/dev/hosts.ini` with the actual Instance IDs after every Terraform run.
 
 #### Playbook: 2 plays
 
 **Play 1 — Jenkins Master:**
 
-| # | Role | Mo ta |
-|---|------|-------|
+| # | Role | Description |
+|---|------|-------------|
 | 1 | `common` | APT cache update (3600s validity) |
-| 2 | `java` | OpenJDK 17 (yeu cau cua Jenkins) |
-| 3 | `docker` | Docker Engine + them user vao docker group |
-| 4 | `jenkins` | Clean old repo -> GPG key 2026 -> Install -> Start -> Fetch password |
+| 2 | `java` | OpenJDK 17 (Jenkins requirement) |
+| 3 | `docker` | Docker Engine + add user to docker group |
+| 4 | `jenkins` | Clean old repo → GPG key 2026 → Install → Start → Fetch password |
 
 **Play 2 — Jenkins Agent:**
 
-| # | Role | Mo ta |
-|---|------|-------|
+| # | Role | Description |
+|---|------|-------------|
 | 1 | `common` | APT cache update |
-| 2 | `java` | OpenJDK 17 (yeu cau cua Jenkins agent process) |
-| 3 | `docker` | Docker Engine (de build Docker images) |
-| 4 | `awscli` | AWS CLI v2 (de ECR login) |
-| 5 | `jenkins-agent` | Tao user `jenkins`, SSH authorized_keys, working directory |
+| 2 | `java` | OpenJDK 17 (required by the Jenkins agent process) |
+| 3 | `docker` | Docker Engine (to build images) |
+| 4 | `awscli` | AWS CLI v2 (for ECR login) |
+| 5 | `jenkins-agent` | Create `jenkins` user, SSH authorized_keys, working directory |
 
-> **Note:** Role `kubectl` **da bi loai bo** khoi play jenkins_agent sau khi chuyen sang GitOps — Agent khong con can goi `kubectl` nua. File role van ton tai tai `roles/kubectl/` de tai su dung neu can (vi du cho mot agent khac).
+> **Note:** The `kubectl` role is **not** included in the Agent play — the Agent does not call the Kubernetes API under GitOps. The role files remain at `roles/kubectl/` for reuse if needed elsewhere.
 
-**Cach chay:**
+**How to run:**
 
 ```bash
 cd 04-ansible-config
 
-# Chay toan bo (Master + Agent):
+# Run both (Master + Agent):
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml
 
-# Chi chay cho Master:
+# Master only:
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_master
 
-# Chi chay cho Agent:
+# Agent only:
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
 ```
 
@@ -433,7 +419,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
 
 ### 05-ecr: Elastic Container Registry
 
-**Muc dich:** Tao ECR repositories luu tru Docker images cho cac microservices.
+**Purpose:** Create ECR repositories that store Docker images for the microservices.
 
 #### Repositories
 
@@ -445,209 +431,190 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
 | `retail-store/orders` | Orders Service (Java/Spring Boot) |
 | `retail-store/checkout` | Checkout Service (TypeScript/NestJS) |
 
-#### Cau hinh
+#### Configuration
 
-| Config | Gia tri |
-|--------|---------|
+| Config | Value |
+|--------|-------|
 | Image Tag Mutability | MUTABLE |
 | Scan on Push | Enabled |
-| Force Delete | true (tien cho lab) |
+| Force Delete | true (convenient for lab work) |
 
-#### Lifecycle Policy (tu dong don dep)
+#### Lifecycle Policy (auto cleanup)
 
-| Rule | Mo ta |
-|------|-------|
-| Priority 1 | Xoa untagged images sau 1 ngay |
-| Priority 2 | Giu toi da 5 images |
+| Rule | Description |
+|------|-------------|
+| Priority 1 | Delete untagged images after 1 day |
+| Priority 2 | Keep at most 5 images |
 
-**Ve chi phi:** ECR tinh phi theo dung luong luu tru ($0.10/GB/thang). Repository rong = $0. Voi lifecycle policy, chi phi gan nhu bang 0. **Khong can `terraform destroy` ECR sau moi lan lab.**
+**About cost:** ECR is billed by storage usage ($0.10/GB/month). Empty repo = $0. With the lifecycle policy, the cost is close to zero. **You do not need to `terraform destroy` ECR after each lab.**
 
 ---
 
 ### 06-monitoring: Observability Stack
 
-**Muc dich:** Thu thap metrics va logs tap trung tu toan cluster, hien thi qua Grafana.
+**Purpose:** Collect metrics and logs cluster-wide and present them through Grafana.
 
-**Deployment method:** Helm imperative (Option A). Se migrate sang ArgoCD GitOps (Option B) o Phase 3.2.
+**Deployment method:** Helm imperative (Option A). Will be migrated to ArgoCD GitOps (Option B) in Phase 3.2.
 
-> Chi tiet trien khai tung buoc xem trong [`06-monitoring/README.md`](./06-monitoring/README.md). Muc nay tom luoc kien truc + quyet dinh.
+> Step-by-step deployment instructions are in [`06-monitoring/README.md`](./06-monitoring/README.md). This section only summarizes the architecture + decisions.
 
 #### Stack components
 
-| Component | Chart | Version | Vai tro |
-|-----------|-------|---------|---------|
+| Component | Chart | Version | Role |
+|-----------|-------|---------|------|
 | `kube-prometheus-stack` | `prometheus-community/kube-prometheus-stack` | 58.0.0 | Bundle: Prometheus + Alertmanager + Grafana + node-exporter + kube-state-metrics + Prometheus Operator CRDs |
 | `loki` | `grafana/loki` | 6.6.0 | Log aggregation (SingleBinary mode, filesystem storage) |
-| `promtail` | `grafana/promtail` | 6.16.0 | Log shipper (DaemonSet, tail `/var/log/pods/*`) |
+| `promtail` | `grafana/promtail` | 6.16.0 | Log shipper (DaemonSet, tails `/var/log/pods/*`) |
 
-#### Pham vi giam sat
+#### Monitoring scope
 
-| Lop | Thu thap gi |
-|-----|-------------|
-| **System** (node-exporter) | CPU/RAM/Disk/Network tung EKS worker node |
-| **Platform** (kube-state-metrics + kubelet) | Trang thai pod/deployment/PVC, restart, OOMKill, per-container CPU/RAM |
+| Layer | What is collected |
+|-------|-------------------|
+| **System** (node-exporter) | CPU/RAM/Disk/Network per EKS worker node |
+| **Platform** (kube-state-metrics + kubelet) | Pod/Deployment/PVC state, restarts, OOMKill, per-container CPU/RAM |
 | **Control plane** (EKS API server) | Request rate, latency per verb |
-| **Logs** (Promtail -> Loki) | Stdout/stderr MOI pod: kube-system, argocd, monitoring, retail-store |
-| **Application metrics** (HTTP rate, p95, 5xx) | **CHUA co** — scope Phase 3.2 (instrumentation UI + ServiceMonitor) |
+| **Logs** (Promtail → Loki) | Stdout/stderr of ALL pods: kube-system, argocd, monitoring, retail-store |
+| **Application metrics** (HTTP rate, p95, 5xx) | **NOT YET** — scoped to Phase 3.2 (UI instrumentation + ServiceMonitor) |
 
 #### Resource footprint
 
-| Resource | Config | Muc dich |
-|----------|--------|----------|
-| Prometheus PVC | 20Gi gp3 | TSDB, retention 15 ngay |
+| Resource | Config | Purpose |
+|----------|--------|---------|
+| Prometheus PVC | 20Gi gp3 | TSDB, 15-day retention |
 | Grafana PVC | 5Gi gp3 | UI config + dashboards cache |
 | Alertmanager PVC | 2Gi gp3 | Silence state |
-| Loki PVC | 10Gi gp3 | Log chunks, retention 7 ngay |
+| Loki PVC | 10Gi gp3 | Log chunks, 7-day retention |
 
-Tong them ~37Gi EBS gp3 / cluster (chi phi ~$4/thang).
+Total ~37 GiB EBS gp3 per cluster (~$4/month).
 
-#### Grafana access
+#### Design decisions
 
-- Mac dinh: `ClusterIP` + `kubectl port-forward svc/kps-grafana 3000:80`
-- Khi demo: doi `service.type: LoadBalancer` trong values file, `helm upgrade`, lay ELB hostname
-- Password admin: sinh ngau nhien qua `openssl rand`, truyen qua `--set` luc install (**khong commit**)
+| Decision | Reason |
+|----------|--------|
+| **Helm imperative (Option A)** instead of GitOps from day 1 | Tuning values quickly during the learning phase; migrate to ArgoCD once the stack stabilizes |
+| **Loki SingleBinary mode** (not SimpleScalable) | Fits log volume <100GB/day, fewer components → fewer failure points |
+| **filesystem storage** (not S3) | Simple, no extra IAM role; can later switch to `storage.type: s3` |
+| **`serviceMonitorSelectorNilUsesHelmValues: false`** | Allow Prometheus to scrape ServiceMonitors in ANY namespace (not filtered by `release=kps`) — convenient for onboarding apps |
+| **Disable EKS control plane components** (`kubeEtcd`, `kubeControllerManager`, `kubeScheduler`, `kubeProxy`) | EKS-managed, no scrape port exposed |
+| **`promtail.serviceMonitor.enabled: false`** | Workaround for a template bug in chart v6.16.0 |
+| **Default StorageClass `gp3`** instead of `gp2` | ~20% cheaper, allows independent tuning of IOPS/throughput; uses CSI provisioner `ebs.csi.aws.com` |
 
-#### Dashboards
+#### Dependencies
 
-4 dashboard community import qua ConfigMap + Grafana sidecar pattern:
-
-| ID | Ten | Muc dich |
-|----|-----|----------|
-| 1860 | Node Exporter Full | System metrics per node |
-| 315 | Kubernetes Cluster Monitoring | Overview cluster |
-| 13639 | Logs / App (Loki) | Log viewer realtime |
-| 15760 | Kubernetes Views / Pods | Pod drill-down |
-
-Dashboard duoc dong goi qua `apply-dashboards.ps1` dung **server-side apply** de vuot qua gioi han 256KB cua annotation `kubectl.kubernetes.io/last-applied-configuration` (dashboard 1860 ~250KB).
-
-#### Quyet dinh thiet ke
-
-| Quyet dinh | Ly do |
-|------------|-------|
-| **Helm imperative (Option A)** thay vi GitOps ngay | Tinh chinh values nhanh trong giai doan hoc; migrate sang ArgoCD khi stack on dinh |
-| **Loki SingleBinary mode** (khong phai SimpleScalable) | Phu hop log <100GB/ngay, it component -> it diem loi |
-| **filesystem storage** (khong phai S3) | Don gian, khong can IAM role them; scale duoc sau bang cach doi `storage.type: s3` |
-| **`serviceMonitorSelectorNilUsesHelmValues: false`** | Cho phep Prometheus scrape ServiceMonitor o MOI namespace (khong phai label `release=kps`) — tien cho onboard app |
-| **Tat EKS control plane components** (`kubeEtcd`, `kubeControllerManager`, `kubeScheduler`, `kubeProxy`) | EKS managed, khong expose port scrape |
-| **`promtail.serviceMonitor.enabled: false`** | Workaround bug template `service-metrics.yaml` trong chart v6.16.0 |
-| **StorageClass `gp3` default** thay vi `gp2` | Re hon ~20%, cho phep tuy chinh IOPS/throughput doc lap; dung CSI provisioner `ebs.csi.aws.com` |
-
-#### Phu thuoc
-
-- `02-cluster-eks` da chay (cluster + EBS CSI driver addon)
-- Khong phu thuoc `03-jenkins-server` hay `05-ecr`
+- `02-cluster-eks` must be applied (cluster + EBS CSI driver addon)
+- Independent of `03-jenkins-server` and `05-ecr`
 
 ---
 
-## Thu tu trien khai
+## Deployment Order
 
 ```
-Buoc 1:  01-network         (VPC, Subnets, NAT GW)
+Step 1:  01-network         (VPC, Subnets, NAT GW)
             │
             ├──────────────────────────────────────┐
             ▼                                      ▼
-Buoc 2:  05-ecr             (song song)     03-jenkins-server
+Step 2:  05-ecr             (parallel)      03-jenkins-server
          (5 ECR repos)                      (Master + Agent EC2)
             │                                      │
             │                                      ▼
             │                              04-ansible-config
-            │                              (Cai Jenkins, Docker, kubectl...)
+            │                              (Install Jenkins, Docker, ...)
             │                                      │
             │                                      │
             └──────────────────┬───────────────────┘
                                ▼
-Buoc 3:                  02-cluster-eks
+Step 3:                  02-cluster-eks
                       (EKS + ArgoCD + EBS CSI Addon)
                                │
                                ▼
-Buoc 4:                  kubectl apply -f
+Step 4:                  kubectl apply -f
                       retail-store-gitops/argocd/*.yml
-                      (onboard ArgoCD Application)
+                      (onboard ArgoCD Applications)
                                │
                                ▼
-Buoc 5 (Phase 3):        06-monitoring
+Step 5 (Phase 3):        06-monitoring
                       (Helm install: kube-prometheus-stack
                        + Loki + Promtail + Dashboards)
 ```
 
-**Dependency:**
-- `02-cluster-eks` va `03-jenkins-server` deu phu thuoc `01-network` (can VPC + subnets)
-- `04-ansible-config` can `03-jenkins-server` (can EC2 Instance ID + SSH key)
-- `05-ecr` doc lap, chay bat ky luc nao
-- `06-monitoring` can `02-cluster-eks` da co EBS CSI driver addon (de tao PVC)
-- **Khong con cross-module dependency** `02 <-> 03` sau khi thu hep quyen Jenkins Agent (xem muc [Thu hep quyen](#thu-hep-quyen-jenkins-agent-da-thuc-hien))
+**Dependencies:**
+- `02-cluster-eks` and `03-jenkins-server` both depend on `01-network` (need VPC + subnets)
+- `04-ansible-config` depends on `03-jenkins-server` (needs EC2 Instance IDs + SSH key)
+- `05-ecr` is independent — can run any time
+- `06-monitoring` depends on `02-cluster-eks` having the EBS CSI driver addon (to create PVCs)
+- **No cross-module dependency** between `02` and `03`
 
 ---
 
-## Huong dan trien khai chi tiet
+## Detailed Deployment Guide
 
-### Buoc 1: Tao S3 Backend (chay 1 lan duy nhat)
+### Step 1: Create the S3 Backend (one-time)
 
-Tao S3 bucket luu Terraform state (neu chua co):
+Create an S3 bucket to store Terraform state (if it does not exist):
 
 ```bash
 aws s3api create-bucket \
-  --bucket <ten-bucket-cua-ban> \
+  --bucket <your-bucket-name> \
   --region ap-southeast-1 \
   --create-bucket-configuration LocationConstraint=ap-southeast-1
 
 aws s3api put-bucket-encryption \
-  --bucket <ten-bucket-cua-ban> \
+  --bucket <your-bucket-name> \
   --server-side-encryption-configuration '{
     "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
   }'
 ```
 
-**Kiem tra:** AWS Console > **S3** > tim bucket > tab Properties > Encryption = Enabled.
+**Verify:** AWS Console > **S3** > find the bucket > Properties tab > Encryption = Enabled.
 
-### Buoc 2: Trien khai VPC
+### Step 2: Deploy the VPC
 
 ```bash
 cd 01-network
 terraform init
-terraform plan    # Xac nhan: 1 VPC, 4 subnets, 1 NAT GW, route tables, IGW
-terraform apply   # Nhap "yes"
+terraform plan    # Expect: 1 VPC, 4 subnets, 1 NAT GW, route tables, IGW
+terraform apply   # Type "yes"
 ```
 
-**Kiem tra AWS Console:**
+**Verify in AWS Console:**
 - **VPC** > Your VPCs > `ecommerce-vpc` (CIDR `10.0.0.0/16`)
 - **VPC** > Subnets > 4 subnets
 - **VPC** > NAT Gateways > 1 NAT gateway (Status: Available)
 
-### Buoc 3: Trien khai ECR
+### Step 3: Deploy ECR
 
 ```bash
 cd ../05-ecr
 terraform init
-terraform plan    # Xac nhan: 5 ECR repos + 5 lifecycle policies
+terraform plan    # Expect: 5 ECR repos + 5 lifecycle policies
 terraform apply
 ```
 
-Ghi lai `registry_id` tu output (= AWS Account ID, se dung khi cau hinh Jenkins).
+Record `registry_id` from the output (= AWS Account ID, needed when configuring Jenkins).
 
-**Kiem tra AWS Console:**
+**Verify in AWS Console:**
 - **ECR** > Repositories > 5 repos `retail-store/*`
-- Click vao repo bat ky > Lifecycle Policy > 2 rules
+- Click any repo > Lifecycle Policy > 2 rules
 
-### Buoc 4: Trien khai Jenkins Server
+### Step 4: Deploy the Jenkins Server
 
 ```bash
 cd ../03-jenkins-server
 terraform init
-terraform plan    # Xac nhan: 2 EC2, 2 SG, 2 IAM roles, 1 key pair, 2 local files
+terraform plan    # Expect: 2 EC2, 2 SG, 2 IAM roles, 1 key pair, 2 local files
 terraform apply
 ```
 
-**Ghi lai tat ca outputs:**
+**Record all outputs:**
 - `jenkins_instance_id` — Master Instance ID
 - `agent_instance_id` — Agent Instance ID
-- `agent_private_ip` — Agent IP (dung khi cau hinh Jenkins node)
+- `agent_private_ip` — Agent IP (used when configuring the Jenkins node)
 
-**Kiem tra AWS Console:**
+**Verify in AWS Console:**
 - **EC2** > Instances > `Jenkins-Master` + `Jenkins-Agent` (running)
 - **IAM** > Roles > `jenkins-ssm-role` + `jenkins-agent-role`
 
-### Buoc 5: Cau hinh Jenkins bang Ansible
+### Step 5: Configure Jenkins with Ansible
 
 **5.1. Copy SSH key:**
 
@@ -656,9 +623,9 @@ cp 03-jenkins-server/jenkins-ansible-key.pem ~/.ssh/
 chmod 400 ~/.ssh/jenkins-ansible-key.pem
 ```
 
-**5.2. Cap nhat inventory:**
+**5.2. Update inventory:**
 
-Sua file `04-ansible-config/inventories/dev/hosts.ini` — thay Instance IDs bang gia tri thuc te tu buoc 4:
+Edit `04-ansible-config/inventories/dev/hosts.ini` — replace Instance IDs with the actual values from Step 4:
 
 ```ini
 [jenkins_master]
@@ -674,25 +641,25 @@ ansible_ssh_private_key_file=~/.ssh/jenkins-ansible-key.pem
 ansible_ssh_private_key_file=~/.ssh/jenkins-ansible-key.pem
 ```
 
-**5.3. Chay Ansible:**
+**5.3. Run Ansible:**
 
 ```bash
 cd 04-ansible-config
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml
 ```
 
-Ket qua mong doi: tat ca tasks `ok` hoac `changed`, khong co `failed`.
+Expected result: all tasks `ok` or `changed`, no `failed`.
 
-### Buoc 6: Trien khai EKS Cluster + ArgoCD
+### Step 6: Deploy the EKS Cluster + ArgoCD
 
 ```bash
 cd ../02-cluster-eks
 terraform init
 terraform plan
-terraform apply    # ~15-20 phut
+terraform apply    # ~15-20 minutes
 ```
 
-Sau khi xong, cau hinh kubectl (tu may local hoac Jenkins Agent):
+After completion, configure kubectl (from the local machine or the Jenkins Agent):
 
 ```bash
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
@@ -700,14 +667,14 @@ kubectl get nodes          # 2 nodes Ready
 kubectl get pods -n argocd # ArgoCD pods Running
 ```
 
-**Kiem tra AWS Console:**
+**Verify in AWS Console:**
 - **EKS** > Clusters > `ecommerce-cluster` > Status: Active
-- Tab **Compute** > Node groups > `main_nodes` > 2 nodes
-- Tab **Access** > thay `jenkins-agent-role`
+- **Compute** tab > Node groups > `main_nodes` > 2 nodes
+- **Access** tab > the cluster creator has admin permissions
 
-### Buoc 7: Mo Jenkins UI
+### Step 7: Open the Jenkins UI
 
-**7.1. Tao SSM tunnel:**
+**7.1. Open an SSM tunnel:**
 
 Windows PowerShell:
 ```powershell
@@ -715,7 +682,7 @@ cd 03-jenkins-server
 .\connect-jenkins.ps1
 ```
 
-Hoac thu cong:
+Or manually:
 ```bash
 aws ssm start-session \
   --target <jenkins_instance_id> \
@@ -723,245 +690,250 @@ aws ssm start-session \
   --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'
 ```
 
-**7.2. Truy cap:** Mo browser `http://localhost:8080`
+**7.2. Browse to:** `http://localhost:8080`
 
 **7.3. Unlock Jenkins:**
 ```bash
 cat 04-ansible-config/jenkins_initial_admin_password.txt
 ```
-Paste password > Continue > **Install suggested plugins** > Tao admin user > Save and Finish.
+Paste the password > Continue > **Install suggested plugins** > create admin user > Save and Finish.
 
 ---
 
-## Cau hinh Jenkins UI
+## Jenkins UI Configuration
 
-Sau khi unlock Jenkins, can cau hinh them:
+After unlocking Jenkins, additional configuration is required:
 
-### Cai plugin
+### Install plugins
 
-**Manage Jenkins** > **Plugins** > **Available plugins** > tim va cai:
-- **SSH Agent** (ket noi agent qua SSH)
-- **Pipeline** (thuong co san sau khi install suggested plugins)
+**Manage Jenkins** > **Plugins** > **Available plugins** > search and install:
+- **SSH Agent** (to connect to the agent over SSH)
+- **Pipeline** (usually already present after installing the suggested plugins)
 
-### Them Credentials
+### Add Credentials
 
 **Manage Jenkins** > **Credentials** > **System** > **Global credentials** > **Add Credentials:**
 
-**Credential 1 — SSH key cho Agent:**
+**Credential 1 — SSH key for the Agent:**
 - Kind: **SSH Username with private key**
 - ID: `jenkins-agent-ssh`
 - Username: `jenkins`
-- Private Key > Enter directly > paste noi dung file `jenkins-ansible-key.pem`
+- Private Key > Enter directly > paste the contents of `jenkins-ansible-key.pem`
 
 **Credential 2 — AWS Account ID:**
 - Kind: **Secret text**
 - ID: `aws-account-id`
-- Secret: `<registry_id tu buoc 3>` (AWS Account ID)
+- Secret: `<registry_id from Step 3>` (AWS Account ID)
 
-**Credential 3 — GitHub PAT cho GitOps:**
+**Credential 3 — GitHub PAT for GitOps:**
 - Kind: **Username with password**
 - ID: `github-gitops-token`
-- Username: `<GitHub username cua ban>`
-- Password: `<Fine-grained PAT cho repo retail-store-gitops>`
+- Username: `<your GitHub username>`
+- Password: `<Fine-grained PAT for the retail-store-gitops repo>`
 
-**Quyen can thiet cua Fine-grained PAT** (nguyen tac least-privilege):
+**Required Fine-grained PAT permissions** (least-privilege):
 
-| Permission | Access | Ly do |
-|-----------|--------|-------|
+| Permission | Access | Reason |
+|-----------|--------|--------|
 | Contents | Read and write | `git clone` + `git push` |
-| Metadata | Read (auto) | Bat buoc cua GitHub |
-| *Cac quyen khac* | — | **Khong cap** |
+| Metadata | Read (auto) | Required by GitHub |
+| *All others* | — | **Do not grant** |
 
-Repository scope: **Chi repo `retail-store-gitops`**, khong cap toan bo org/user.
+Repository scope: **Only the `retail-store-gitops` repo**, not the whole org/user.
 
-**Expiration:** Nen dat 90 ngay (khong chon "No expiration") — neu token leak thi van co TTL.
+**Expiration:** Prefer 90 days (not "No expiration") — if the token leaks, it still has a TTL.
 
-### Them Agent Node
+### Add an Agent Node
 
 **Manage Jenkins** > **Nodes** > **New Node:**
 - Node name: `agent-1`
 - Type: **Permanent Agent**
 
-Cau hinh:
+Configuration:
 
-| Field | Gia tri |
-|-------|---------|
+| Field | Value |
+|-------|-------|
 | Remote root directory | `/var/lib/jenkins/agent` |
 | Labels | `docker-agent` |
 | Usage | Use this node as much as possible |
 | Launch method | Launch agents via SSH |
-| Host | `<agent_private_ip>` (tu Terraform output) |
+| Host | `<agent_private_ip>` (from Terraform output) |
 | Credentials | `jenkins-agent-ssh` |
 | Host Key Verification | Non verifying |
 
-Save > doi status chuyen thanh **Connected** (icon xanh).
+Save > the status should switch to **Connected** (green icon).
 
 ---
 
-## Cai ArgoCD Application
+## Install ArgoCD Applications
 
-Sau khi EKS cluster co ArgoCD chay (Buoc 6), can dang ky Application de ArgoCD biet repo nao va folder nao can track.
+After the EKS cluster has ArgoCD running (Step 6), you need to register the Applications so ArgoCD knows which repo/folder to track.
 
-**7.1. Clone repo gitops:**
+**7.1. Clone the gitops repo:**
 
 ```bash
 git clone https://github.com/<your-username>/retail-store-gitops.git
 cd retail-store-gitops
 ```
 
-**7.2. Apply ArgoCD Application:**
+**7.2. Apply ArgoCD Applications (all 5 services):**
 
 ```bash
-# Dam bao kubectl da tro ve cluster
+# Make sure kubectl points to the cluster
 aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 
-# Apply Application definition
-kubectl apply -f argocd/ui-application.yml
+# Apply all Application definitions
+kubectl apply -f argocd/
 ```
 
-**7.3. Kiem tra:**
+**7.3. Verify:**
 
 ```bash
 kubectl get application -n argocd
-# NAME              SYNC STATUS   HEALTH STATUS
-# retail-store-ui   Synced        Healthy
+# NAME                    SYNC STATUS   HEALTH STATUS
+# retail-store-ui         Synced        Healthy
+# retail-store-catalog    Synced        Healthy
+# retail-store-cart       Synced        Healthy
+# retail-store-orders     Synced        Healthy
+# retail-store-checkout   Synced        Healthy
 ```
 
-**7.4. Truy cap ArgoCD UI:**
+**7.4. Access the ArgoCD UI:**
 
 ```bash
-# Port-forward ArgoCD server
+# Port-forward the ArgoCD server
 kubectl port-forward svc/argocd-server -n argocd 8080:443
 
-# Lay password admin ban dau
+# Get the initial admin password
 kubectl get secret argocd-initial-admin-secret -n argocd \
   -o jsonpath="{.data.password}" | base64 -d
 ```
 
-Mo browser: `https://localhost:8080` — username `admin`, password tu command tren.
+Browser: `https://localhost:8080` — username `admin`, password from the command above.
 
 ---
 
-## Chay Pipeline CI/CD
+## Run the CI/CD Pipeline
 
-### Tao Pipeline Job
+### Create a Pipeline Job
 
 **Jenkins Dashboard** > **New Item:**
-- Name: `ui-pipeline`
+- Name: `ui-pipeline` (or `catalog-pipeline`, `cart-pipeline`, ...)
 - Type: **Pipeline** > OK
 
-Muc **Pipeline:**
+Under **Pipeline:**
 - Definition: **Pipeline script from SCM**
 - SCM: **Git**
-- Repository URL: `<URL cua repo retail-store-microservices>`
-- Credentials: (them neu repo private)
+- Repository URL: `<URL of retail-store-microservices repo>`
+- Credentials: (add if the repo is private)
 - Branch: `*/main`
-- Script Path: `src/ui/Jenkinsfile`
+- Script Path: `src/ui/Jenkinsfile` (or `src/<service>/Jenkinsfile`)
 - Save
 
-### Chay thu
+### Trigger a build
 
-Click **Build Now**. Pipeline chay 3 stages:
+Click **Build Now**. The pipeline runs 3 stages:
 
 ```
 Build Docker Image  ──►  Push to ECR  ──►  Update GitOps
 ```
 
-| Stage | Hanh dong |
-|-------|-----------|
-| Build Docker Image | Clone repo, build Docker image, tag bang `git rev-parse --short=7 HEAD` |
-| Push to ECR | ECR login (IAM role Agent), push image len ECR repository |
-| Update GitOps | Clone repo gitops, `sed` cap nhat image tag trong `apps/ui/deployment.yml`, commit + push |
+| Stage | Action |
+|-------|--------|
+| Build Docker Image | Clone repo, build Docker image, tag with `git rev-parse --short=7 HEAD` |
+| Push to ECR | ECR login (Agent IAM role), push image to the ECR repository |
+| Update GitOps | Clone the gitops repo, `sed` the image tag in `apps/<service>/deployment.yml`, commit + push |
 
-**Ket qua mong doi:**
-- Build SUCCESS tren Jenkins
-- Image moi xuat hien tren ECR (check tab Images cua repo)
-- Commit moi xuat hien trong repo `retail-store-gitops` (author: Jenkins CI)
-- ArgoCD UI chuyen app `retail-store-ui` tu `Synced` -> `OutOfSync` -> `Syncing` -> `Synced` trong 3 phut
-- Pod moi duoc tao tren EKS, pod cu terminating (rolling update)
+**Expected result:**
+- Build SUCCESS in Jenkins
+- New image visible in ECR (check the Images tab)
+- New commit in the `retail-store-gitops` repo (author: Jenkins CI)
+- ArgoCD UI transitions the app from `Synced` → `OutOfSync` → `Syncing` → `Synced` within 3 minutes
+- New pods created on EKS, old pods terminating (rolling update)
 
-**Kiem tra tren EKS:**
+**Verify on EKS:**
 ```bash
-kubectl get pods -n retail-store       # 2 pods Running (version moi)
-kubectl get svc ui -n retail-store     # External URL (LoadBalancer)
+kubectl get pods -n retail-store       # All services Running (new version)
+kubectl get svc -n retail-store        # UI has an External URL (LoadBalancer)
 ```
 
-Mo URL LoadBalancer tren browser de kiem tra UI service.
+Open the LoadBalancer URL in a browser to check the UI service.
 
-### Trigger tu dong (roadmap)
+### Automatic trigger (roadmap)
 
-Hien tai trigger thu cong. De tu dong:
+Currently the trigger is manual. To automate:
 
-**Option A — Webhook GitHub -> Jenkins:**
-- Yeu cau Jenkins co URL public (ALB + HTTPS)
-- Repo GitHub > Settings > Webhooks > URL `https://<jenkins>/github-webhook/`
+**Option A — GitHub webhook → Jenkins:**
+- Requires Jenkins to have a public URL (ALB + HTTPS)
+- GitHub repo > Settings > Webhooks > URL `https://<jenkins>/github-webhook/`
 - Pipeline: `triggers { githubPush() }`
 
-**Option B — Polling SCM** (don gian hon, khong can expose Jenkins):
+**Option B — SCM polling** (simpler, no need to expose Jenkins):
 ```groovy
 triggers {
     pollSCM('H/5 * * * *')
 }
 ```
+
 ---
 
-## Phase 3 — Trien khai Monitoring
+## Phase 3 — Monitoring Deployment
 
-Sau khi pipeline CI/CD da chay on dinh, trien khai observability stack de thu thap metrics + logs tap trung.
+After the CI/CD pipeline is stable, deploy the observability stack to collect metrics and logs centrally.
 
 ### Pre-flight check
 
-Truoc khi cai monitoring, verify cluster co du prerequisite:
+Verify the cluster has the prerequisites:
 
 ```powershell
-# [1] Context dung cluster
+# [1] Correct cluster context
 kubectl config current-context
 # → Expected: arn:aws:eks:ap-southeast-1:...:cluster/ecommerce-cluster
 
-# [2] Node Ready
+# [2] Nodes Ready
 kubectl get nodes
-# → 2 node Ready, version v1.31.x
+# → 2 nodes Ready, version v1.31.x
 
-# [3] EBS CSI driver pod chay (quan trong)
+# [3] EBS CSI driver pods running (important)
 kubectl get pods -n kube-system | Select-String "ebs-csi"
-# → Phai co ebs-csi-controller-* va ebs-csi-node-*
+# → Must show ebs-csi-controller-* and ebs-csi-node-*
 
-# [4] StorageClass gp3 default
+# [4] Default StorageClass gp3
 kubectl get storageclass
 # → gp3 (default), provisioner = ebs.csi.aws.com
 ```
 
-**Neu thieu EBS CSI driver:** module `02-cluster-eks` da co `cluster_addons` + `irsa-ebs-csi.tf`. Chay `terraform apply` trong module do.
+**If EBS CSI driver is missing:** the `02-cluster-eks` module already defines `cluster_addons` + `irsa-ebs-csi.tf`. Run `terraform apply` in that module.
 
-**Neu thieu `gp3` StorageClass:**
+**If the `gp3` StorageClass is missing:**
 ```powershell
 cd 06-monitoring
 kubectl apply -f storageclass-gp3.yaml
 kubectl patch storageclass gp2 -p '{\"metadata\": {\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"false\"}}}'
 ```
 
-### Cai dat
+### Installation
 
-**1. Tao namespace:**
+**1. Create namespace:**
 ```powershell
 kubectl create namespace monitoring
 kubectl label namespace monitoring purpose=observability
 ```
 
-**2. Them Helm repos:**
+**2. Add Helm repos:**
 ```powershell
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
 ```
 
-**3. Sinh password Grafana va luu vao password manager:**
+**3. Generate a Grafana password and save it in a password manager:**
 ```powershell
 $GRAFANA_PASSWORD = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 24 | ForEach-Object {[char]$_})
 Write-Host "Grafana admin password: $GRAFANA_PASSWORD"
 ```
 
-**4. Cai kube-prometheus-stack:**
+**4. Install kube-prometheus-stack:**
 ```powershell
 cd 06-monitoring
 
@@ -973,7 +945,7 @@ helm install kps prometheus-community/kube-prometheus-stack `
   --wait --timeout 10m
 ```
 
-**5. Cai Loki + Promtail:**
+**5. Install Loki + Promtail:**
 ```powershell
 helm install loki grafana/loki `
   --namespace monitoring `
@@ -988,7 +960,7 @@ helm install promtail grafana/promtail `
   --wait --timeout 3m
 ```
 
-**6. Import 4 dashboards:**
+**6. Import the 4 dashboards:**
 ```powershell
 cd dashboards
 .\apply-dashboards.ps1
@@ -997,142 +969,42 @@ cd dashboards
 ### Verify
 
 ```powershell
-# Tat ca pod Running
+# All pods Running
 kubectl -n monitoring get pods
 
-# PVC Bound (3 cai: prometheus, alertmanager, grafana + 1 loki = 4)
+# PVCs Bound (Prometheus, Alertmanager, Grafana + Loki = 4)
 kubectl -n monitoring get pvc
 
-# 4 ConfigMap dashboards
+# 4 dashboard ConfigMaps
 kubectl -n monitoring get configmap -l grafana_dashboard=1
 
-# Sidecar da load dashboards
+# Sidecar has loaded the dashboards
 kubectl -n monitoring logs deployment/kps-grafana -c grafana-sc-dashboard --tail=20 | Select-String "Writing"
 ```
 
-### Truy cap Grafana
+### Access Grafana
 
 ```powershell
 kubectl -n monitoring port-forward svc/kps-grafana 3000:80
 ```
 
-Browser `http://localhost:3000` — username `admin`, password tu buoc 3.
+Browser `http://localhost:3000` — username `admin`, password from Step 3.
 
-Kiem tra:
-- **Connections → Data sources:** Prometheus va Loki deu "Save & test" thanh cong
-- **Dashboards → Kubernetes folder:** 4 dashboards co data
-- **Explore → Prometheus:** query `up` ra series
-- **Explore → Loki:** query `{namespace="monitoring"}` ra logs
+Check:
+- **Connections → Data sources:** Prometheus and Loki both "Save & test" succeed
+- **Dashboards → Kubernetes folder:** 4 dashboards with data
+- **Explore → Prometheus:** query `up` returns series
+- **Explore → Loki:** query `{namespace="monitoring"}` returns logs
 
-### Troubleshooting
-
-| Trieu chung | Nguyen nhan | Fix |
-|-------------|-------------|-----|
-| Pod Prometheus Pending | PVC khong binding (thieu CSI driver) | Verify `kubectl get pods -n kube-system \| Select-String ebs-csi` |
-| Pod Prometheus Pending voi "Insufficient memory" | Node t3.large 2 node khong du | Scale `node_desired_size = 3` trong `02-cluster-eks/variables.tf`, `terraform apply` |
-| Promtail install fail "YAML parse error service-metrics.yaml" | Bug chart 6.16.0 voi `serviceMonitor.enabled=true` | File `values-promtail.yaml` da dat `serviceMonitor.enabled: false` |
-| Dashboard import lon fail "annotations: Too long" | Dashboard JSON ~250KB vuot gioi han 256KB cua annotation client-side apply | Script `apply-dashboards.ps1` dung `kubectl apply --server-side=true --force-conflicts` |
-| Grafana datasource Loki "Unable to connect" | Service name sai trong `additionalDataSources` | Verify: `kubectl exec deploy/kps-grafana -c grafana -- wget -qO- http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/labels` |
-| `kubectl top` bao "Metrics API not available" | Chua cai metrics-server | `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml` |
-
-Chi tiet xem [`06-monitoring/README.md`](./06-monitoring/README.md#known-issues).
-
-### Roadmap
-
-Sau Phase 3.1 (hien tai):
-- **Phase 3.2:** Migrate stack monitoring tu Helm imperative sang ArgoCD GitOps (Option B). Tao ArgoCD Application cho kps + Loki + Promtail, commit values files + dashboards vao `retail-store-gitops`.
-- **Phase 3.3:** Instrument 5 microservice — expose `/metrics`, tao `ServiceMonitor` CRD, import dashboard chuyen cho app.
-- **Phase 3.4:** PrometheusRule custom + Alertmanager routing Slack/Discord/Email.
-- **Phase 3.5:** Distributed tracing (Tempo hoac Jaeger).
+See the full detail in [`06-monitoring/README.md`](./06-monitoring/README.md).
 
 ---
 
-#### `04-ansible-config/site.yaml`
-Da loai bo role `kubectl` khoi play `jenkins_agent`. Folder `roles/kubectl/` van duoc giu lai de tai su dung neu can.
+## Terraform State Management
 
-### Quy trinh apply thay doi
+All Terraform state is stored remotely on S3 (encrypted, with locking enabled).
 
-```bash
-# Buoc 1: Ansible — loai bo kubectl khoi Jenkins Agent (tuy chon)
-cd 04-ansible-config
-ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
-# Luu y: role kubectl da bi xoa khoi playbook. Binary kubectl da cai truoc do
-# se khong duoc go cai thu cong. Neu muon, SSH vao Agent va:
-#   sudo rm /usr/local/bin/kubectl
-
-# Buoc 2: Terraform — apply module 02 TRUOC (loai bo access entry + SG rule)
-cd ../02-cluster-eks
-terraform plan    # Xac nhan: xoa access_entry, policy_association, SG rule
-terraform apply
-
-# Buoc 3: Terraform — apply module 03 (loai bo agent_eks IAM policy)
-cd ../03-jenkins-server
-terraform plan    # Xac nhan: xoa aws_iam_role_policy.agent_eks
-terraform apply
-```
-
-> **Tai sao apply module 02 truoc module 03?**
-> Neu apply module 03 truoc (bo agent_eks IAM policy), Agent IAM role mat quyen `eks:DescribeCluster`. Luc do module 02 van con `access_entries` tham chieu role qua `data.aws_iam_role.jenkins_agent` — van hoat dong vi data source chi doc ARN, khong can policy. Tuy nhien lam theo thu tu 02 -> 03 giup ro rang hon: clear quyen vao cluster truoc, roi clear quyen tren role.
-
-### Kiem tra sau khi apply
-
-```bash
-# 1. Verify Jenkins Agent KHONG the truy cap EKS API
-# SSH vao Agent qua SSM, roi:
-aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
-kubectl get nodes
-# Expected: error "User is not authorized" (vi khong con access entry)
-
-# 2. Verify Pipeline van chay thanh cong
-# Trigger Jenkins build UI — tat ca 3 stage pass:
-#   Build Docker Image -> Push to ECR -> Update GitOps
-
-# 3. Verify ArgoCD van sync binh thuong
-kubectl get application -n argocd retail-store-ui
-# Expected: Synced / Healthy
-
-# 4. Verify SG rule da bi xoa
-aws ec2 describe-security-group-rules \
-  --filters Name=group-id,Values=<eks-cluster-sg-id> \
-  --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='<jenkins-agent-sg-id>']"
-# Expected: rong (khong con rule)
-```
-
-### Loi ich da dat duoc
-
-| Khia canh | Cai thien cu the |
-|-----------|------------------|
-| **Blast radius** | Neu Jenkins Agent bi compromise: attacker chi push duoc image xau len ECR va commit xau len gitops repo — khong the `kubectl delete` cluster, khong the xoa workload |
-| **Trust boundary** | CI (Jenkins) = ECR + Git. CD (ArgoCD) = Git + K8s. Khong co single point nam ca 2 quyen |
-| **Compliance** | Pass "CI should not have admin access to runtime" (CIS Kubernetes Benchmark, OWASP CI/CD Security Top 10) |
-| **Drift control** | Khong ai co the `kubectl edit` tu Agent de patch "hotfix" khong qua Git |
-| **Teardown** | Khong con cross-module dependency 02 -> 03 — destroy theo thu tu nao cung duoc (hoac chay song song) |
-
-### Rollback (neu can khoi phuc quyen)
-
-Neu gap van de voi ArgoCD va can `kubectl` truc tiep tu Agent tam thoi:
-
-```bash
-# Revert 4 commit thu hep quyen
-git log --oneline  # Tim commit "feat(security): narrow..."
-git revert <commit-hash>
-git push
-
-# Apply lai
-cd 03-jenkins-server && terraform apply
-cd ../02-cluster-eks && terraform apply
-cd ../04-ansible-config && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml
-```
-
-Tot hon: fix ArgoCD thay vi roll back. Neu ArgoCD chet, chay `kubectl apply` tu may local (nguoi tao cluster van co admin access qua `enable_cluster_creator_admin_permissions`).
-
----
-
-## Quan ly Terraform State
-
-Tat ca Terraform state luu tru remote tren S3 (encrypted, locking enabled).
-
-**State keys theo module:**
+**State keys per module:**
 
 | Module | State Key |
 |--------|-----------|
@@ -1141,165 +1013,115 @@ Tat ca Terraform state luu tru remote tren S3 (encrypted, locking enabled).
 | 03-jenkins-server | `03-jenkins-server/terraform.tfstate` |
 | 05-ecr | `05-ecr/terraform.tfstate` |
 
-Moi module co state file rieng, cho phep trien khai va quan ly doc lap.
+Each module has its own state file, allowing independent deployment and management.
 
 ---
 
-## Bao mat
+## Security
 
 ### Network Security
-- Jenkins Master + Agent nam trong **private subnet** (khong co public IP)
-- Jenkins Master SG: chi mo port **8080 tu VPC CIDR**
-- Jenkins Agent SG: chi mo port **22 tu Jenkins Master SG**
-- EKS cluster SG: khong co rule tu Jenkins Agent (da loai bo sau GitOps)
-- **Khong mo port 22 ra internet** — SSH qua AWS SSM Session Manager
-- NAT Gateway cho outbound traffic (apt, Docker pull, plugin download, ECR, GitHub)
+- Jenkins Master + Agent live in **private subnets** (no public IP)
+- Jenkins Master SG: only port **8080 from VPC CIDR**
+- Jenkins Agent SG: only port **22 from the Jenkins Master SG**
+- EKS cluster SG: no ingress from Jenkins Agent
+- **Port 22 is not exposed to the internet** — SSH goes through AWS SSM Session Manager
+- NAT Gateway for outbound traffic (apt, Docker pull, plugin downloads, ECR, GitHub)
 
 ### Access Management
-- Jenkins Master: IAM role `jenkins-ssm-role` (chi SSM)
-- Jenkins Agent: IAM role `jenkins-agent-role` (**chi SSM + ECR** — da thu hep khoi EKS quyen sau GitOps)
-- ECR policy gioi han chi cho repositories `retail-store/*`
-- EKS access entry: **khong co** entry nao cho Jenkins Agent (da loai bo sau GitOps)
-- GitHub PAT: scope chi mot repo `retail-store-gitops`, quyen `Contents: write`
-- SSH key tu sinh boi Terraform (RSA 4096-bit), luu local voi permission `0400`
+- Jenkins Master: IAM role `jenkins-ssm-role` (SSM only)
+- Jenkins Agent: IAM role `jenkins-agent-role` (**SSM + ECR only** — no EKS permissions)
+- ECR policy scoped to the `retail-store/*` repositories
+- EKS access entries: **none** for the Jenkins Agent
+- GitHub PAT: scoped to a single repo `retail-store-gitops`, `Contents: write`
+- SSH key generated by Terraform (RSA 4096-bit), stored locally with permission `0400`
 
 ### Secret Management
-- Jenkins admin password **fetch truc tiep ve file** (khong hien thi trong Ansible log)
-- AWS Account ID luu trong Jenkins Credentials (masked trong build log)
-- GitHub PAT luu trong Jenkins Credentials (masked trong build log)
-- **Grafana admin password** sinh random tai local (PowerShell `Get-Random` 24 ky tu), truyen vao Helm qua `--set grafana.adminPassword=...` — **khong commit vao Git**, khong hardcode trong `values-*.yaml`
-- Cac file nhay cam da them vao `.gitignore`:
+- Jenkins admin password **fetched directly to a file** (never printed in Ansible logs)
+- AWS Account ID stored in Jenkins Credentials (masked in build logs)
+- GitHub PAT stored in Jenkins Credentials (masked in build logs)
+- **Grafana admin password** generated randomly locally (PowerShell `Get-Random`, 24 chars), passed via `--set grafana.adminPassword=...` — **never committed to Git**, never hard-coded in `values-*.yaml`
+- Sensitive files are listed in `.gitignore`:
   - `*.pem`, `*.key`, `*.secret`
   - `jenkins_initial_admin_password.txt`
   - `.terraform/`, `.terraform.lock.hcl`
 
 ### Monitoring Security (Phase 3)
-- **Grafana Service type = `ClusterIP`** (khong expose public) — truy cap qua `kubectl port-forward svc/kps-grafana 3000:80`
-- **Prometheus + Alertmanager** cung la `ClusterIP` — debug qua port-forward, khong co endpoint public
-- **Loki gateway** la `ClusterIP` — chi Grafana trong cluster goi qua DNS `loki-gateway.monitoring.svc.cluster.local`
-- **EBS volumes encrypted at-rest** (StorageClass `gp3` co `parameters.encrypted: "true"`) — Prometheus TSDB + Loki chunks + Grafana DB deu duoc ma hoa
-- **IRSA cho EBS CSI controller** — role `${cluster_name}-ebs-csi-driver` chi co policy `AmazonEBSCSIDriverPolicy`, scope gioi han OIDC provider cua cluster (least privilege)
-- **Log scraping**: Promtail chay voi ServiceAccount co quyen `get/list/watch` tren pods trong moi namespace — **khong co quyen write** len cluster resource
-- Neu demo hoi dong can expose Grafana, doi sang `LoadBalancer` **tam thoi** roi revert — tranh de ELB public 24/7
+- **Grafana Service type = `ClusterIP`** (not publicly exposed) — access via `kubectl port-forward svc/kps-grafana 3000:80`
+- **Prometheus + Alertmanager** are also `ClusterIP` — debug via port-forward, no public endpoint
+- **Loki gateway** is `ClusterIP` — only Grafana in the cluster calls it via DNS `loki-gateway.monitoring.svc.cluster.local`
+- **EBS volumes encrypted at-rest** (StorageClass `gp3` has `parameters.encrypted: "true"`) — Prometheus TSDB + Loki chunks + Grafana DB are all encrypted
+- **IRSA for the EBS CSI controller** — role `${cluster_name}-ebs-csi-driver` only has `AmazonEBSCSIDriverPolicy`, scoped to the cluster's OIDC provider (least privilege)
+- **Log scraping:** Promtail runs with a ServiceAccount that has `get/list/watch` on pods in every namespace — **no write permissions** to cluster resources
 
 ### Compliance
-- Tat ca Ansible tasks dung **native modules** (khong dung shell/command) — idempotent va auditable
-- Khong hardcode credentials trong code
-- Jenkins su dung **signed repository** (GPG key verification)
-- ECR bat **scan on push** cho moi image
-- GitOps model: moi thay doi cluster deu co audit trail qua Git history
-- Helm releases (`kps`, `loki`, `promtail`) pin version `--version X.Y.Z` de reproducible — tranh chart drift giua cac lan install
-
----
-
-## So do mang
-
-```
-Internet
-    │
-    ▼
-┌──────────────┐
-│ Internet GW  │
-└──────┬───────┘
-       │
-┌──────▼──────────────────────────────────────────────┐
-│ Public Subnets                                       │
-│ ┌─────────────────────┐  ┌─────────────────────┐    │
-│ │ 10.0.101.0/24 (1a)  │  │ 10.0.102.0/24 (1b) │    │
-│ │ EKS: external ELB   │  │ EKS: external ELB   │    │
-│ └─────────┬───────────┘  └─────────────────────┘    │
-│           │                                          │
-│     ┌─────▼─────┐                                    │
-│     │  NAT GW   │                                    │
-│     └─────┬─────┘                                    │
-└───────────┼──────────────────────────────────────────┘
-            │
-┌───────────▼──────────────────────────────────────────┐
-│ Private Subnets                                       │
-│ ┌────────────────────────┐ ┌───────────────────────┐ │
-│ │ 10.0.1.0/24 (1a)       │ │ 10.0.2.0/24 (1b)     │ │
-│ │                         │ │                       │ │
-│ │ - Jenkins Master        │ │ - EKS Nodes           │ │
-│ │   (t3.medium, port 8080)│ │   (t3.large x2-3)     │ │
-│ │ - Jenkins Agent         │ │ - ArgoCD               │ │
-│ │   (t3.medium, port 22)  │ │ - retail-store ns      │ │
-│ │ - SSM managed           │ │                       │ │
-│ └─────────────────────────┘ └───────────────────────┘ │
-└───────────────────────────────────────────────────────┘
-```
-
-**Security Group Flow (sau khi thu hep quyen):**
-
-```
-Jenkins Master (jenkins-sg)
-    │ port 22 (SSH)
-    ▼
-Jenkins Agent (jenkins-agent-sg)
-    │ outbound only: ECR, GitHub, NAT GW
-    ▼
-(Internet)
-```
-
-EKS Cluster SG khong con nhan traffic tu Jenkins — chi ArgoCD trong cluster pull tu Git repo qua NAT GW.
-
-> **Lich su:** Truoc khi chuyen sang GitOps, Jenkins Agent co SG rule port 443 vao EKS cluster SG de chay `kubectl apply`. Rule nay da bi loai bo.
+- All Ansible tasks use **native modules** (no shell/command) — idempotent and auditable
+- No credentials hard-coded in code
+- Jenkins uses a **signed repository** (GPG key verification)
+- ECR has **scan on push** enabled for every image
+- GitOps model: every cluster change has an audit trail via Git history
+- Helm releases (`kps`, `loki`, `promtail`) pinned with `--version X.Y.Z` for reproducibility
 
 ---
 
 ## Tagging Convention
 
-Tat ca AWS resources duoc auto-tag qua Terraform provider `default_tags`:
+All AWS resources are auto-tagged via the Terraform provider `default_tags`:
 
-| Tag | Gia tri | Muc dich |
-|-----|---------|----------|
-| `Project` | `DevSecOps-Ecommerce` | Phan loai theo du an |
-| `Environment` | `Dev` | Phan loai theo moi truong |
-| `ManagedBy` | `Terraform` | Xac dinh tool quan ly |
+| Tag | Value | Purpose |
+|-----|-------|---------|
+| `Project` | `DevSecOps-Ecommerce` | Classify by project |
+| `Environment` | `Dev` | Classify by environment |
+| `ManagedBy` | `Terraform` | Identify the managing tool |
 
 ---
 
-## Teardown (Huy ha tang)
+## Teardown (Cleanup After Each Lab)
 
-Sau khi thu hep quyen Jenkins Agent, **khong con cross-module dependency giua 02 va 03** — destroy theo thu tu nao cung duoc (hoac chay song song de tiet kiem thoi gian):
+After narrowing Jenkins Agent permissions, **there is no cross-module dependency between `02` and `03`** — destroy in any order (or in parallel to save time).
+
+Cleanup after each lab is strongly recommended to avoid recurring AWS charges (EKS control plane $0.10/h, NAT GW $0.045/h, EBS volumes, ELB, etc.).
 
 ```bash
-# 0. (Khuyen nghi) Go monitoring stack truoc de xoa sach PVC + EBS volumes
-#    Neu bo qua, terraform destroy van xoa duoc cluster nhung co the de lai
-#    EBS volume mo coi (status "available") trong AWS — tinh phi $0.08/GB/thang
+# 0. (Recommended) Uninstall the monitoring stack first to release PVCs + EBS volumes.
+#    If you skip this, terraform destroy still removes the cluster but may leave
+#    orphaned EBS volumes (status "available") billed at $0.08/GB/month.
 helm uninstall promtail -n monitoring
 helm uninstall loki     -n monitoring
 helm uninstall kps      -n monitoring
-kubectl -n monitoring delete pvc --all        # xoa PVC -> EBS volume tu xoa (reclaimPolicy=Delete)
+kubectl -n monitoring delete pvc --all        # Deletes PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete)
 kubectl delete namespace monitoring
-# (Tuy chon) xoa CRDs cua Prometheus Operator neu khong con release nao dung:
+# (Optional) Delete the Prometheus Operator CRDs if no release still uses them:
 #   kubectl get crd -o name | Select-String "monitoring.coreos.com" | ForEach-Object { kubectl delete $_ }
 
-# 1. Xoa ArgoCD Applications (tranh ArgoCD co gang recreate resource da bi xoa)
+# 1. Delete ArgoCD Applications (prevents ArgoCD from trying to recreate resources being deleted)
 kubectl delete application --all -n argocd
 
-# 2. Xoa workload namespace
+# 2. Delete the workload namespace
 kubectl delete namespace retail-store
 
-# 3. Destroy EKS + Jenkins song song (khong con phu thuoc lan nhau)
+# 3. Destroy EKS + Jenkins in parallel (no cross-module dependency anymore)
 # Terminal 1:
 cd 02-cluster-eks && terraform destroy
 
-# Terminal 2 (song song):
+# Terminal 2 (in parallel):
 cd 03-jenkins-server && terraform destroy
 
-# 4. Sau khi ca 2 hoan tat, xoa VPC
+# 4. After both finish, delete the VPC
 cd ../01-network && terraform destroy
 
-# 5. (Tuy chon) Xoa ECR — chi khi khong can nua
+# 5. (Optional) Delete ECR — only if you will not need it again.
+#    With the lifecycle policy, ECR cost is near zero, so you can usually keep it.
 cd ../05-ecr && terraform destroy
 ```
 
-> **Canh bao:** `terraform destroy` xoa toan bo resources. Dam bao da backup du lieu truoc khi chay.
+> **Warning:** `terraform destroy` deletes every resource. Back up data first.
 >
-> **Luu y EBS volumes (monitoring):** PVC cua Prometheus (20Gi), Loki (10Gi), Grafana (5Gi), Alertmanager (2Gi) lien ket voi EBS volume tu dong. Neu skip buoc 0 va destroy cluster truc tiep, AWS se de lai volume o trang thai `available`. Vao **AWS Console > EC2 > Volumes**, loc theo tag `Project=DevSecOps-Ecommerce` va status `available`, xoa tay de tranh phi luu tru.
->
-> **Lich su:** Truoc khi thu hep quyen, module 02 tham chieu SG va IAM role cua module 03 qua data source — phai destroy 02 truoc, neu khong se gap loi `DependencyViolation` khi AWS xoa SG. Sau khi thu hep, dependency nay da bi loai bo hoan toan.
+> **Note on monitoring EBS volumes:** Prometheus (20Gi), Loki (10Gi), Grafana (5Gi), Alertmanager (2Gi) PVCs are bound to EBS volumes. If you skip Step 0 and destroy the cluster directly, AWS may leave those volumes in `available` state. Go to **AWS Console > EC2 > Volumes**, filter by tag `Project=DevSecOps-Ecommerce` and status `available`, and delete them manually to avoid storage charges.
+
+### Quick cost-saving option (keep state)
+
+If you only want to pause the lab (not re-run Terraform next time), keep the S3 state and ECR, but destroy compute: `02-cluster-eks` + `03-jenkins-server`. Next session, re-apply both modules to recreate the cluster and EC2 instances. The VPC and ECR stay intact.
 
 ---
 
-> *Du an mon hoc NT114 - Dai hoc Cong nghe Thong tin (UIT)*
+> *NT114 course project — University of Information Technology (UIT)*
