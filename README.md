@@ -190,18 +190,18 @@ infrastructure/
 │   ├── variables.tf
 │   └── outputs.tf
 │
-└── 06-monitoring/                        # Layer 6: Observability (Helm imperative)
-    ├── README.md                         #   Dedicated module guide
-    ├── storageclass-gp3.yaml             #   Default StorageClass (CSI-backed)
-    ├── values-kube-prometheus-stack.yaml #   Prometheus + Grafana + Alertmanager config
-    ├── values-loki.yaml                  #   Loki SingleBinary mode
-    ├── values-promtail.yaml              #   Promtail DaemonSet (log shipper)
-    └── dashboards/
-        ├── apply-dashboards.ps1          #   Packages JSON → ConfigMap (server-side apply)
-        ├── node-exporter-full.json       #   Dashboard 1860
-        ├── k8s-cluster-monitoring.json   #   Dashboard 315
-        ├── logs-app-loki.json            #   Dashboard 13639
-        └── k8s-views-pods.json           #   Dashboard 15760
+└── 06-monitoring/                        # Layer 6: Observability — ARCHIVED (Phase 3.1 Helm scripts)
+    ├── README.md                         #   Deprecation notice + migration guide
+    ├── storageclass-gp3.yaml             #   (historical) Default StorageClass
+    ├── values-kube-prometheus-stack.yaml #   (historical) Prometheus + Grafana + Alertmanager config
+    ├── values-loki.yaml                  #   (historical) Loki SingleBinary mode
+    ├── values-promtail.yaml              #   (historical) Promtail DaemonSet (log shipper)
+    └── dashboards/                       #   (historical) JSON files + PowerShell apply script
+```
+
+> **Phase 3.2 note:** The monitoring stack has been migrated to GitOps. Live configuration and ArgoCD Applications now live in `retail-store-gitops/platform/monitoring/`. See [`06-monitoring/README.md`](./06-monitoring/README.md) for the full migration map.
+
+```
 ```
 
 ---
@@ -450,13 +450,15 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook site.yaml --limit jenkins_agent
 
 ---
 
-### 06-monitoring: Observability Stack
+### 06-monitoring: Observability Stack (Archived — see GitOps repo)
 
 **Purpose:** Collect metrics and logs cluster-wide and present them through Grafana.
 
-**Deployment method:** Helm imperative (Option A). Will be migrated to ArgoCD GitOps (Option B) in Phase 3.2.
+**Deployment method:** ~~Helm imperative~~ → **ArgoCD GitOps** (migrated in Phase 3.2).
 
-> Step-by-step deployment instructions are in [`06-monitoring/README.md`](./06-monitoring/README.md). This section only summarizes the architecture + decisions.
+> The live configuration now lives in `retail-store-gitops/platform/monitoring/`. The `06-monitoring/` directory in this repo is archived for historical reference only. See [`06-monitoring/README.md`](./06-monitoring/README.md) for the full migration map.
+>
+> This section documents the architecture and design decisions, which are unchanged by the migration.
 
 #### Stack components
 
@@ -527,14 +529,14 @@ Step 3:                  02-cluster-eks
                       (EKS + ArgoCD + EBS CSI Addon)
                                │
                                ▼
-Step 4:                  kubectl apply -f
-                      retail-store-gitops/argocd/*.yml
-                      (onboard ArgoCD Applications)
+Step 4:                  bash scripts/bootstrap.sh
+                      (retail-store-gitops repo)
+                      Creates Grafana secret + applies root Application.
+                      ArgoCD syncs: 5 service apps + 6 platform monitoring apps.
                                │
                                ▼
-Step 5 (Phase 3):        06-monitoring
-                      (Helm install: kube-prometheus-stack
-                       + Loki + Promtail + Dashboards)
+                         All Applications Synced/Healthy
+                      (monitoring up via GitOps — no manual Helm installs)
 ```
 
 **Dependencies:**
@@ -877,126 +879,72 @@ triggers {
 
 ---
 
-## Phase 3 — Monitoring Deployment
+## Phase 3 — Monitoring Deployment (GitOps)
 
-After the CI/CD pipeline is stable, deploy the observability stack to collect metrics and logs centrally.
+> **Phase 3.2 completed.** The monitoring stack is now fully managed by ArgoCD GitOps.
+> The old Helm-imperative scripts in `06-monitoring/` are archived.
+> **Do not run `helm install` manually** — ArgoCD owns the monitoring namespace.
+
+The monitoring stack (Prometheus + Grafana + Loki + Promtail) is deployed automatically by `bootstrap.sh` as part of the standard cluster setup (Step 4 above).
 
 ### Pre-flight check
 
-Verify the cluster has the prerequisites:
+Before running `bootstrap.sh`, verify the cluster is ready:
 
-```powershell
-# [1] Correct cluster context
+```bash
+# Correct cluster context
 kubectl config current-context
-# → Expected: arn:aws:eks:ap-southeast-1:...:cluster/ecommerce-cluster
+# → arn:aws:eks:ap-southeast-1:...:cluster/ecommerce-cluster
 
-# [2] Nodes Ready
+# Nodes Ready
 kubectl get nodes
 # → 2 nodes Ready, version v1.31.x
 
-# [3] EBS CSI driver pods running (important)
-kubectl get pods -n kube-system | Select-String "ebs-csi"
-# → Must show ebs-csi-controller-* and ebs-csi-node-*
+# EBS CSI driver running (needed for PVCs)
+kubectl get pods -n kube-system | grep ebs-csi
+# → ebs-csi-controller-* and ebs-csi-node-* running
 
-# [4] Default StorageClass gp3
-kubectl get storageclass
-# → gp3 (default), provisioner = ebs.csi.aws.com
+# ArgoCD running
+kubectl get pods -n argocd
+# → All pods Running
 ```
 
-**If EBS CSI driver is missing:** the `02-cluster-eks` module already defines `cluster_addons` + `irsa-ebs-csi.tf`. Run `terraform apply` in that module.
+### Deploy
 
-**If the `gp3` StorageClass is missing:**
-```powershell
-cd 06-monitoring
-kubectl apply -f storageclass-gp3.yaml
-kubectl patch storageclass gp2 -p '{\"metadata\": {\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"false\"}}}'
+```bash
+cd retail-store-gitops
+bash scripts/bootstrap.sh
 ```
 
-### Installation
+Save the Grafana password printed by the script. Then track sync progress:
 
-**1. Create namespace:**
-```powershell
-kubectl create namespace monitoring
-kubectl label namespace monitoring purpose=observability
-```
-
-**2. Add Helm repos:**
-```powershell
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
-```
-
-**3. Generate a Grafana password and save it in a password manager:**
-```powershell
-$GRAFANA_PASSWORD = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 24 | ForEach-Object {[char]$_})
-Write-Host "Grafana admin password: $GRAFANA_PASSWORD"
-```
-
-**4. Install kube-prometheus-stack:**
-```powershell
-cd 06-monitoring
-
-helm install kps prometheus-community/kube-prometheus-stack `
-  --namespace monitoring `
-  --version 58.0.0 `
-  -f values-kube-prometheus-stack.yaml `
-  --set grafana.adminPassword="$GRAFANA_PASSWORD" `
-  --wait --timeout 10m
-```
-
-**5. Install Loki + Promtail:**
-```powershell
-helm install loki grafana/loki `
-  --namespace monitoring `
-  --version 6.6.0 `
-  -f values-loki.yaml `
-  --wait --timeout 5m
-
-helm install promtail grafana/promtail `
-  --namespace monitoring `
-  --version 6.16.0 `
-  -f values-promtail.yaml `
-  --wait --timeout 3m
-```
-
-**6. Import the 4 dashboards:**
-```powershell
-cd dashboards
-.\apply-dashboards.ps1
-```
-
-### Verify
-
-```powershell
-# All pods Running
-kubectl -n monitoring get pods
-
-# PVCs Bound (Prometheus, Alertmanager, Grafana + Loki = 4)
-kubectl -n monitoring get pvc
-
-# 4 dashboard ConfigMaps
-kubectl -n monitoring get configmap -l grafana_dashboard=1
-
-# Sidecar has loaded the dashboards
-kubectl -n monitoring logs deployment/kps-grafana -c grafana-sc-dashboard --tail=20 | Select-String "Writing"
+```bash
+kubectl get applications -n argocd -w
+# All 12 Applications should reach Synced / Healthy within ~10 minutes.
 ```
 
 ### Access Grafana
 
-```powershell
+```bash
 kubectl -n monitoring port-forward svc/kps-grafana 3000:80
 ```
 
-Browser `http://localhost:3000` — username `admin`, password from Step 3.
+Browser `http://localhost:3000` — username `admin`, password from `bootstrap.sh`.
 
-Check:
-- **Connections → Data sources:** Prometheus and Loki both "Save & test" succeed
-- **Dashboards → Kubernetes folder:** 4 dashboards with data
-- **Explore → Prometheus:** query `up` returns series
-- **Explore → Loki:** query `{namespace="monitoring"}` returns logs
+To recover a lost password:
+```bash
+kubectl -n monitoring get secret grafana-admin \
+  -o jsonpath="{.data.admin-password}" | base64 -d
+```
 
-See the full detail in [`06-monitoring/README.md`](./06-monitoring/README.md).
+### Full documentation
+
+See [`retail-store-gitops/platform/monitoring/README.md`](https://github.com/tranduyloc895/retail-store-gitops/blob/main/platform/monitoring/README.md) for:
+- Architecture diagram
+- Sync-wave order for the 6 ArgoCD Applications
+- Dashboard list + how to add new ones
+- Chart versions + upgrade procedure
+- Cleanup steps
 
 ---
 
@@ -1082,22 +1030,19 @@ After narrowing Jenkins Agent permissions, **there is no cross-module dependency
 Cleanup after each lab is strongly recommended to avoid recurring AWS charges (EKS control plane $0.10/h, NAT GW $0.045/h, EBS volumes, ELB, etc.).
 
 ```bash
-# 0. (Recommended) Uninstall the monitoring stack first to release PVCs + EBS volumes.
-#    If you skip this, terraform destroy still removes the cluster but may leave
-#    orphaned EBS volumes (status "available") billed at $0.08/GB/month.
-helm uninstall promtail -n monitoring
-helm uninstall loki     -n monitoring
-helm uninstall kps      -n monitoring
-kubectl -n monitoring delete pvc --all        # Deletes PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete)
-kubectl delete namespace monitoring
-# (Optional) Delete the Prometheus Operator CRDs if no release still uses them:
-#   kubectl get crd -o name | Select-String "monitoring.coreos.com" | ForEach-Object { kubectl delete $_ }
+# 0. (Recommended) Delete ArgoCD Applications first — this tells ArgoCD to stop
+#    managing these resources, preventing it from fighting terraform destroy.
+#    Also releases PVCs → EBS volumes auto-deleted (reclaimPolicy=Delete).
+kubectl delete application root -n argocd          # Deletes all child Applications
+kubectl delete namespace retail-store monitoring   # Removes pods, services, LoadBalancers, PVCs
 
-# 1. Delete ArgoCD Applications (prevents ArgoCD from trying to recreate resources being deleted)
-kubectl delete application --all -n argocd
-
-# 2. Delete the workload namespace
-kubectl delete namespace retail-store
+# If you prefer fine-grained control (delete monitoring apps before service apps):
+#   kubectl delete application platform-dashboards platform-promtail platform-loki \
+#     platform-kube-prometheus-stack platform-storageclass platform-namespace -n argocd
+#   kubectl delete namespace monitoring
+#   kubectl delete application retail-store-ui retail-store-catalog retail-store-cart \
+#     retail-store-orders retail-store-checkout -n argocd
+#   kubectl delete namespace retail-store
 
 # 3. Destroy EKS + Jenkins in parallel (no cross-module dependency anymore)
 # Terminal 1:
