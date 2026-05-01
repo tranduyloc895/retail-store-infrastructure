@@ -1,5 +1,24 @@
 ---
-- name: Install OpenJDK 17
+# Jenkins LTS (2.492+) yêu cầu Java 21+. Ansible role này cài Java 21
+# và gỡ bỏ Java 17 nếu đang tồn tại để tránh conflict trong update-alternatives.
+
+- name: Remove OpenJDK 17 if present (Jenkins LTS now requires Java 21+)
   ansible.builtin.apt:
     name: openjdk-17-jdk
+    state: absent
+    purge: yes
+
+- name: Install OpenJDK 21
+  ansible.builtin.apt:
+    name: openjdk-21-jdk
     state: present
+    update_cache: yes
+
+- name: Verify Java version
+  ansible.builtin.command: java -version
+  register: java_version_output
+  changed_when: false
+
+- name: Show Java version
+  ansible.builtin.debug:
+    msg: "{{ java_version_output.stderr_lines }}"
