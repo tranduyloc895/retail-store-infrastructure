@@ -1,0 +1,30 @@
+# Thêm GPG key của Trivy để apt có thể xác thực gói
+- name: Add Trivy GPG key
+  ansible.builtin.apt_key:
+    url: https://aquasecurity.github.io/trivy-repo/deb/public.key
+    state: present
+
+# Thêm repository Trivy vào danh sách apt sources
+- name: Add Trivy APT repository
+  ansible.builtin.apt_repository:
+    repo: "deb https://aquasecurity.github.io/trivy-repo/deb {{ ansible_distribution_release }} main"
+    state: present
+    filename: trivy
+
+# Cài đặt Trivy từ repository vừa thêm
+- name: Install Trivy
+  ansible.builtin.apt:
+    name: trivy
+    state: present
+    update_cache: yes
+
+# Chạy lệnh kiểm tra phiên bản Trivy, lưu kết quả vào biến
+- name: Verify Trivy version
+  ansible.builtin.command: trivy --version
+  register: trivy_version
+  changed_when: false
+
+# Hiển thị phiên bản Trivy ra màn hình để xác nhận
+- name: Show Trivy version
+  ansible.builtin.debug:
+    msg: "{{ trivy_version.stdout_lines[0] }}"
