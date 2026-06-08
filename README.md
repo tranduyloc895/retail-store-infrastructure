@@ -711,6 +711,12 @@ After unlocking Jenkins, additional configuration is required:
 **Manage Jenkins** > **Plugins** > **Available plugins** > search and install:
 - **SSH Agent** (to connect to the agent over SSH)
 - **Pipeline** (usually already present after installing the suggested plugins)
+- **Pipeline: Multibranch** (required — the pipeline uses `when { branch 'main' }`, which only works in a Multibranch job)
+- **GitHub Branch Source** (discovers branches/PRs from GitHub and sets `BRANCH_NAME` / `CHANGE_ID`)
+- **AnsiColor** (required — the Jenkinsfile `options` block uses `ansiColor('xterm')`)
+- **Slack Notification** (optional — only if you want build notifications; the pipeline degrades gracefully without it)
+
+> **Why Multibranch?** Each Jenkinsfile gates the Push/Update stages with `branch 'main'` + `not changeRequest()`. Those conditions read `BRANCH_NAME` / `CHANGE_ID`, which Jenkins only populates for **Multibranch Pipeline** jobs. A plain "Pipeline script from SCM" job leaves them unset, so those stages are skipped forever. Use Multibranch (below).
 
 ### Add Credentials
 
@@ -744,6 +750,21 @@ After unlocking Jenkins, additional configuration is required:
 Repository scope: **Only the `retail-store-gitops` repo**, not the whole org/user.
 
 **Expiration:** Prefer 90 days (not "No expiration") — if the token leaks, it still has a TTL.
+
+**Credential 4 — GitHub PAT for branch scanning:**
+- Kind: **Username with password**
+- ID: `github-scan-token`
+- Username: `<your GitHub username>`
+- Password: `<PAT with read access to the retail-store-microservices repo>`
+
+The Multibranch job uses this to call the GitHub API when scanning for branches/PRs. **Without it the scan falls back to anonymous access (60 requests/hour) and stalls on rate limits** (`Jenkins-Imposed API Limiter ... Sleeping for 5 min`). The `retail-store-microservices` repo is public, so a token with **no scopes** still raises the limit to 5000/hour.
+
+| Permission | Access | Reason |
+|-----------|--------|--------|
+| Contents | Read | Clone source + scan branches |
+| Commit statuses | Read and write *(optional)* | Report build ✓/✗ back to GitHub commits. Omit it and add the "Disable GitHub Notifications" behaviour instead (see below) to avoid a harmless `403 Resource not accessible` line in the log. |
+
+> You may reuse `github-gitops-token` for scanning **only if** it has read access to the microservices repo. Keeping a separate `github-scan-token` is cleaner (different repo, different least-privilege scope).
 
 ### Add an Agent Node
 
@@ -817,24 +838,34 @@ Browser: `https://localhost:8080` — username `admin`, password from the comman
 
 ## Run the CI/CD Pipeline
 
-### Create a Pipeline Job
+### Create a Multibranch Pipeline Job (one per service)
+
+Create **5 jobs** — one per service. They differ only in **name** and **Script Path**.
+
+Example for `ui`:
 
 **Jenkins Dashboard** > **New Item:**
 - Name: `ui-pipeline` (or `catalog-pipeline`, `cart-pipeline`, ...)
-- Type: **Pipeline** > OK
+- Type: **Multibranch Pipeline** > OK
 
-Under **Pipeline:**
-- Definition: **Pipeline script from SCM**
-- SCM: **Git**
-- Repository URL: `<URL of retail-store-microservices repo>`
-- Credentials: (add if the repo is private)
-- Branch: `*/main`
-- Script Path: `src/ui/Jenkinsfile` (or `src/<service>/Jenkinsfile`)
-- Save
+**Branch Sources** > **Add source** > **GitHub:**
+- Credentials: `github-scan-token`
+- Repository HTTPS URL: `<URL of retail-store-microservices repo>`
+
+**Build Configuration:**
+- Mode: **by Jenkinsfile**
+- Script Path: `src/ui/Jenkinsfile` (change per service: `src/catalog/Jenkinsfile`, `src/cart/...`, etc.)
+
+**Scan Repository Triggers:**
+- ☑ **Periodically if not otherwise run** > Interval: **1 minute** (needed because Jenkins is private — no GitHub webhook yet, so it must poll)
+
+Save. Jenkins scans the repo, discovers the `main` branch (and any branch/PR containing that Jenkinsfile), and creates a sub-job per branch.
+
+*(Optional, per job: **Branch Sources** > **GitHub** > **Add behaviour** > **"Disable GitHub Notifications"** to silence the harmless `403 Could not update commit status` line — see Credential 4.)*
 
 ### Trigger a build
 
-Click **Build Now**. The pipeline runs 3 stages:
+The pipeline runs 3 stages:
 
 ```
 Build Docker Image  ──►  Push to ECR  ──►  Update GitOps
@@ -844,12 +875,16 @@ Build Docker Image  ──►  Push to ECR  ──►  Update GitOps
 |-------|--------|
 | Build Docker Image | Clone repo, build Docker image, tag with `git rev-parse --short=7 HEAD` |
 | Push to ECR | ECR login (Agent IAM role), push image to the ECR repository |
-| Update GitOps | Clone the gitops repo, `sed` the image tag in `apps/<service>/deployment.yml`, commit + push |
+| Update GitOps | Clone the gitops repo, `sed` the image **tag** in `apps/<service>/values.yaml`, commit + push |
 
-**Expected result:**
+> **⚠️ First build of a branch — important.** When Jenkins **auto-scans** and builds a branch for the first time, the cause is *branch indexing* (not a user) and there is **no previous build to diff**, so both `triggeredBy 'UserIdCause'` and `changeset 'src/<svc>/**'` are false → **all stages are skipped**. This is expected.
+>
+> To get the first real deploy: open the **`main` sub-job** and click **Build Now**. That makes the cause `UserIdCause` → the `when` gate passes → Build + Push + Update run. From the **2nd commit onward**, pushing code that touches `src/<svc>/**` triggers the stages automatically via `changeset`.
+
+**Expected result (after Build Now on `main`):**
 - Build SUCCESS in Jenkins
 - New image visible in ECR (check the Images tab)
-- New commit in the `retail-store-gitops` repo (author: Jenkins CI)
+- New commit in the `retail-store-gitops` repo (author: Jenkins CI) updating `apps/<service>/values.yaml`
 - ArgoCD UI transitions the app from `Synced` → `OutOfSync` → `Syncing` → `Synced` within 3 minutes
 - New pods created on EKS, old pods terminating (rolling update)
 
@@ -863,19 +898,12 @@ Open the LoadBalancer URL in a browser to check the UI service.
 
 ### Automatic trigger (roadmap)
 
-Currently the trigger is manual. To automate:
+Currently new commits are picked up by the **periodic repo scan** (1 minute) configured above; the very first build of each branch still needs a manual **Build Now** (see the warning). To make it fully event-driven:
 
-**Option A — GitHub webhook → Jenkins:**
+**GitHub webhook → Jenkins:**
 - Requires Jenkins to have a public URL (ALB + HTTPS)
 - GitHub repo > Settings > Webhooks > URL `https://<jenkins>/github-webhook/`
-- Pipeline: `triggers { githubPush() }`
-
-**Option B — SCM polling** (simpler, no need to expose Jenkins):
-```groovy
-triggers {
-    pollSCM('H/5 * * * *')
-}
-```
+- With a Multibranch job + GitHub Branch Source, pushes then trigger scans/builds instantly (no `triggers {}` block needed in the Jenkinsfile).
 
 ---
 
