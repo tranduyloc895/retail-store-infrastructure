@@ -792,14 +792,14 @@ Save > the status should switch to **Connected** (green icon).
 
 After the EKS cluster has ArgoCD running (Step 6), you need to register the Applications so ArgoCD knows which repo/folder to track.
 
-**7.1. Clone the gitops repo:**
+** Clone the gitops repo:**
 
 ```bash
 git clone https://github.com/<your-username>/retail-store-gitops.git
 cd retail-store-gitops
 ```
 
-**7.2. Apply ArgoCD Applications (all 5 services):**
+** Apply ArgoCD Applications (all 5 services):**
 
 ```bash
 # Make sure kubectl points to the cluster
@@ -809,7 +809,7 @@ aws eks update-kubeconfig --name ecommerce-cluster --region ap-southeast-1
 kubectl apply -f argocd/
 ```
 
-**7.3. Verify:**
+** Verify:**
 
 ```bash
 kubectl get application -n argocd
@@ -821,7 +821,7 @@ kubectl get application -n argocd
 # retail-store-checkout   Synced        Healthy
 ```
 
-**7.4. Access the ArgoCD UI:**
+** Access the ArgoCD UI:**
 
 ```bash
 # Port-forward the ArgoCD server
